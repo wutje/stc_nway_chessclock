@@ -1,4 +1,8 @@
-#include <time.h>
+#include <stdint.h>
+#include <stdio.h>
+#include "stc15.h"
+
+#include "uart.h"
 
 /* Protocol on the wire:
  * 1 byte SYNC
@@ -8,7 +12,7 @@
  * 1 byte CHECKSUM
 */
 
-#define SYNC_BYTE 0xFA
+#define SYNC_BYTE 's'
 enum ISR_STATE {
     ISR_STATE_SYNC,
     ISR_STATE_OPC,
@@ -19,16 +23,15 @@ enum ISR_STATE {
 
 #define BAUDRATE 9600 // serial port speed (4800/9600 - standard for GPS)
 
-#define MAX_PACKET_SIZE 3
-
 uint8_t rx_buf[MAX_PACKET_SIZE];
-enum ISR_STATE isr_rx_state = ISR_STATE_SYNC;
 volatile __bit rx_packet_available = 0;
+static enum ISR_STATE isr_rx_state = ISR_STATE_SYNC;
 
-uint8_t tx_buf[MAX_PACKET_SIZE + 1]; //+1 for checksum
-enum ISR_STATE isr_tx_state;
+static volatile uint8_t tx_busy = 0;
+static uint8_t tx_buf[MAX_PACKET_SIZE + 1]; //+1 for checksum
+static enum ISR_STATE isr_tx_state;
 
-void uart1_init()
+void uart1_init(void)
 {
     //P_SW1 |= (1 << 6);          // move UART1 pins -> P3_6:rxd, P3_7:txd
     // UART1 use Timer2
@@ -38,11 +41,10 @@ void uart1_init()
     AUXR |= 0x14;               // T2R: run T2, T2x12: T2 clk src sysclk/1
     AUXR |= 0x01;               // S1ST2: T2 is baudrate generator
     ES = 1;                     // enable uart1 interrupt
-    EA = 1;                     // enable interrupts
     REN = 1;
 }
 
-uint8_t calc_checksum(uint8_t opc, uint8_t data0, uint8_t data1)
+static uint8_t calc_checksum(uint8_t opc, uint8_t data0, uint8_t data1)
 {
     uint8_t checksum = SYNC_BYTE;
     checksum += opc;
@@ -53,9 +55,10 @@ uint8_t calc_checksum(uint8_t opc, uint8_t data0, uint8_t data1)
 
 void uart1_isr() __interrupt 4 __using 2
 {
+
     /* Receive interrupt */
     if (RI) {
-        RI = 0;                 // clear int
+        RI = 0;                 // clear inta
         /* Read byte from UART */
         uint8_t rx_byte = SBUF;
         switch(isr_rx_state)
@@ -84,6 +87,7 @@ void uart1_isr() __interrupt 4 __using 2
     /* Transmit interrupt */
     if (TI) {
         TI = 0;
+        tx_busy = 0;
         switch(isr_tx_state)
         {
             case ISR_STATE_SYNC:
@@ -102,14 +106,55 @@ void uart1_isr() __interrupt 4 __using 2
     }
 }
 
+void uart1_send_byte(uint8_t b)
+{
+    while(tx_busy);
+    tx_busy = 1;
+    SBUF = b;
+}
+
 void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1)
 {
-    tx_buf[0] = opc;
-    tx_buf[1] = data0;
-    tx_buf[2] = data1;
-    tx_buf[3] = calc_checksum(tx_buf[0], tx_buf[1], tx_buf[2]);
-    /* Start ISR by sending the first byte */
-    isr_tx_state = ISR_STATE_OPC;
-    SBUF = SYNC_BYTE;
+    if(0)
+        return;
+    /* Sync version */
+    else if(0)
+    {
+        tx_busy = 0;
+        SBUF = SYNC_BYTE;
+        while(!tx_busy);
+        tx_busy = 0;
+        SBUF = opc;
+        while(!tx_busy);
+        tx_busy = 0;
+        SBUF = data0;
+        while(!tx_busy);
+        tx_busy = 0;
+        SBUF = data1;
+        while(!tx_busy);
+        tx_busy = 0;
+        SBUF = calc_checksum(tx_buf[0], tx_buf[1], tx_buf[2]);
+        while(!tx_busy);
+        /* Start ISR by sending the first byte */
+        isr_tx_state = ISR_STATE_OPC;
+    }
+    /* Link TX to RX internally */
+    else if(0) {
+        rx_buf[0] = opc;
+        rx_buf[1] = data0;
+        rx_buf[2] = data1;
+        rx_packet_available = 1;
+    }
+    /* Normal code */
+    else if(1)
+    {
+        tx_buf[0] = opc;
+        tx_buf[1] = data0;
+        tx_buf[2] = data1;
+        tx_buf[3] = calc_checksum(tx_buf[0], tx_buf[1], tx_buf[2]);
+        /* Start ISR by sending the first byte */
+        isr_tx_state = ISR_STATE_OPC;
+        SBUF = SYNC_BYTE;
+    }
 }
 

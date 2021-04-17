@@ -48,7 +48,7 @@ ledtable[]
     0b10000110, //     0b01111001, // E
     0b10001110, //     0b01110001, // F
     0b11000010, //     G  0x14
-    0b10001011, //     H  
+    0b10001011, //     H
     0b11111011, //     I
     0b11100001, //     J
     0b10001010, //     K  0x18
@@ -123,6 +123,7 @@ ledtable2[]
     0b10110110, //     Z
 };
 
+#if 0
 const char weekDay[][4] = {
       "SUN",
       "MON",
@@ -132,6 +133,7 @@ const char weekDay[][4] = {
       "FRI",
       "SAT",
 };
+#endif
 
 uint8_t tmpbuf[4];
 __bit   dot0;
@@ -144,11 +146,11 @@ uint8_t dbuf[4];
 #define clearTmpDisplay() { dot0=0; dot1=0; dot2=0; dot3=0; tmpbuf[0]=tmpbuf[1]=tmpbuf[2]=tmpbuf[3]=LED_BLANK; }
 
 #define filldisplay(pos,val,dp) { tmpbuf[pos]=(uint8_t)(val); if (dp) dot##pos=1;}
-#define dotdisplay(pos,dp) { if (dp) dot##pos=1;}
+#define dotdisplay(pos,dp) { dot##pos=dp;}
 
 #define updateTmpDisplay() { uint8_t tmp; \
                         tmp=ledtable[tmpbuf[0]]; if (dot0) tmp&=0x7F; dbuf[0]=tmp; \
                         tmp=ledtable[tmpbuf[1]]; if (dot1) tmp&=0x7F; dbuf[1]=tmp; \
                         tmp=ledtable[tmpbuf[3]]; if (dot3) tmp&=0x7F; dbuf[3]=tmp; \
                         tmp=ledtable2[tmpbuf[2]]; if (dot2) tmp&=0x7F; dbuf[2]=tmp; }
-                        
+

@@ -1,16 +1,15 @@
 SDCC ?= sdcc
 STCCODESIZE ?= 4089
 SDCCOPTS ?= --code-size $(STCCODESIZE) --xram-size 0 --data-loc 0x30 --disable-warning 126 --disable-warning 59
-SDCCREV ?= -Dstc15f204ea
+SDCCREV ?= -Dstc15f404as 
 STCGAL ?= stcgal/stcgal.py
-STCGALOPTS ?= 
+STCGALOPTS ?= --baud 9600
 STCGALPORT ?= /dev/ttyUSB0
-STCGALPROT ?= auto
+STCGALPROT ?= stc15
 FLASHFILE ?= main.hex
 SYSCLK ?= 11059
-CFLAGS ?= -DWITH_ALT_LED9 -DWITHOUT_LEDTABLE_RELOC -DSHOW_TEMP_DATE_WEEKDAY
-
-SRC = src/adc.c src/ds1302.c
+CFLAGS ?= -DFOSC=$(SYSCLK)200 -D WITH_ALT_LED9 -D WITHOUT_LEDTABLE_RELOC 
+SRC = src/uart.c
 
 OBJ=$(patsubst src%.c,build%.rel, $(SRC))
 
@@ -18,7 +17,7 @@ all: main
 
 build/%.rel: src/%.c src/%.h
 	mkdir -p $(dir $@)
-	$(SDCC) $(SDCCOPTS) $(SDCCREV) -o $@ -c $<
+	$(SDCC) $(SDCCOPTS) $(SDCCREV) $(CFLAGS) -o $@ -c $<
 
 main: $(OBJ)
 	$(SDCC) -o build/ src/$@.c $(SDCCOPTS) $(SDCCREV) $(CFLAGS) $^
@@ -29,8 +28,9 @@ main: $(OBJ)
 eeprom:
 	sed -ne '/:..1/ { s/1/0/2; p }' main.hex > eeprom.hex
 
-flash:
-	$(STCGAL) -p $(STCGALPORT) -P $(STCGALPROT) -t $(SYSCLK) $(STCGALOPTS) $(FLASHFILE)
+flash: main
+	#$(STCGAL) -p $(STCGALPORT) -P $(STCGALPROT) -t $(SYSCLK) $(STCGALOPTS) $(FLASHFILE)
+	$(STCGAL) -p $(STCGALPORT) -P $(STCGALPROT) $(STCGALOPTS) $(FLASHFILE)
 
 clean:
 	rm -f *.ihx *.hex *.bin
