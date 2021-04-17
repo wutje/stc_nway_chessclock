@@ -163,13 +163,7 @@ static void read_buttons(void)
     }
 }
 
-/*
-  interrupt: every 0.1ms=100us come here
-
-  Check button status
-  Dynamically LED turn on
- */
-void timer0_isr() __interrupt 1 __using 1
+static void display_scan_out(void)
 {
     uint8_t tmp;
     // display refresh ISR
@@ -190,7 +184,46 @@ void timer0_isr() __interrupt 1 __using 1
         LED_DIGITS_PORT &= tmp;
     }
     displaycounter++;
-    read_buttons();
+}
+
+static uint8_t time_now;
+/*
+  interrupt: every 0.1ms=100us come here
+
+  Check button status
+  Dynamically LED turn on
+ */
+void timer0_isr() __interrupt 1 __using 1
+{
+    //display_scan_out();
+    //read_buttons();
+    static uint8_t ms_10timer = 0;
+    ms_10timer++;
+    if(ms_10timer > 100)
+    {
+        time_now++;
+        ms_10timer = 0;
+    }
+}
+
+#define TMO_10MS 1
+#define TMO_100MS 10
+#define TMO_SECOND 100
+static void set_timer(uint8_t *timer, uint8_t tmo)
+{
+    *timer = time_now + tmo;
+}
+
+static uint8_t timer_elapsed(uint8_t *timer)
+{
+    uint8_t t = *timer;
+    t -= time_now;
+    if(t > 0x80)
+    {
+        *timer = time_now;
+        return 1;
+    }
+    return 0;
 }
 
 /*
@@ -305,6 +338,16 @@ static uint8_t msg_available(void) {
     return rx;
 }
 
+static void beep_on(void)
+{
+    BUZZER_ON;
+}
+
+static void beep_off(void)
+{
+    BUZZER_OFF;
+}
+
 static void send_assign(uint8_t your_id, uint8_t time)
 {
     uart1_send_packet(OPC_ASSIGN, your_id, time);
@@ -312,12 +355,12 @@ static void send_assign(uint8_t your_id, uint8_t time)
 
 static void send_passon(uint8_t ttl)
 {
-    uart1_send_packet(OPC_PASSON, ttl, 0xAA);
+    uart1_send_packet(OPC_PASSON, ttl, 'x');
 }
 
 static void send_claim(uint8_t id)
 {
-    uart1_send_packet(OPC_CLAIM, id, 0xAA);
+    uart1_send_packet(OPC_CLAIM, id, 'x');
 }
 
 static void statemachine(void)
@@ -325,6 +368,26 @@ static void statemachine(void)
     static enum StateMachine state = SM_START;
     static uint8_t id;
     static uint8_t remaining_time;
+    static uint8_t beep_timer = 0;
+    static uint8_t run_timer = 0;
+
+    static uint8_t t = 0;
+    if (timer_elapsed(&beep_timer))
+    {
+        t ^=1;
+        set_timer(&beep_timer, 1 * TMO_10MS);
+    }
+
+    if(t)
+        beep_off();
+    else {
+        beep_on();
+    }
+
+    if (!timer_elapsed(&run_timer))
+        return;
+
+    set_timer(&run_timer, 4 * TMO_100MS);
 
     clearTmpDisplay();
     filldisplay(2, state / 10, 0);
@@ -432,9 +495,10 @@ static void statemachine(void)
         case SM_TTL_CHECK:
             if(rx_buf[1] == 0) {
                 send_claim(id);
-                //TODO BEEP
+                set_timer(&beep_timer, 3 * TMO_100MS);
                 state = SM_MSG_CLAIM;
             } else {
+                set_timer(&beep_timer, 1 * TMO_10MS);
                 //TODO BEEP
                 //TODO sleep relative to TTL?
                 send_passon(rx_buf[1] - 1);
@@ -473,8 +537,8 @@ int main()
 {
     // SETUP
     // set photoresistor & ntc pins to open-drain output
-    P1M1 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
-    P1M0 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
+    P1M1 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP) | (1<<5);
+    P1M0 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP) | (1<<5);
 
     Timer0Init(); // display refresh & switch read
 
@@ -487,14 +551,9 @@ int main()
     {
         static uint16_t tick_counter = 0;
         tick_counter++;
-        if(tick_counter >= 60000)
-        {
-            static uint8_t t = 0;
-            tick_counter = 0;
-            statemachine();
-            dotdisplay(1, t);
-            t ^= 1;
-        }
+        display_scan_out();
+        read_buttons();
+        statemachine();
 
         __critical {
             updateTmpDisplay();

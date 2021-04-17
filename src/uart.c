@@ -115,38 +115,15 @@ void uart1_send_byte(uint8_t b)
 
 void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1)
 {
-    if(0)
-        return;
-    /* Sync version */
-    else if(0)
-    {
-        tx_busy = 0;
-        SBUF = SYNC_BYTE;
-        while(!tx_busy);
-        tx_busy = 0;
-        SBUF = opc;
-        while(!tx_busy);
-        tx_busy = 0;
-        SBUF = data0;
-        while(!tx_busy);
-        tx_busy = 0;
-        SBUF = data1;
-        while(!tx_busy);
-        tx_busy = 0;
-        SBUF = calc_checksum(tx_buf[0], tx_buf[1], tx_buf[2]);
-        while(!tx_busy);
-        /* Start ISR by sending the first byte */
-        isr_tx_state = ISR_STATE_OPC;
-    }
     /* Link TX to RX internally */
-    else if(0) {
+    if(1) {
         rx_buf[0] = opc;
         rx_buf[1] = data0;
         rx_buf[2] = data1;
         rx_packet_available = 1;
     }
     /* Normal code */
-    else if(1)
+    else
     {
         tx_buf[0] = opc;
         tx_buf[1] = data0;
