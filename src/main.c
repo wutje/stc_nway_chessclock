@@ -314,10 +314,10 @@ enum StateMachine {
     SM_IS_CLAIM,
     SM_CLAIM_CHECK,
     SM_TTL_CHECK,
-    SM_TTL_CHECK_TIMEOUT,
     SM_MSG_CLAIM,
     SM_IS_CLAIM2,
     SM_BTN,
+    SM_TTL_CHECK_TIMEOUT,
 };
 
 static void btn_clear(void) {
