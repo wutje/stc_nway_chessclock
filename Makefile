@@ -1,9 +1,9 @@
 SDCC ?= sdcc
 STCCODESIZE ?= 4089
 SDCCOPTS ?= --code-size $(STCCODESIZE) --xram-size 0 --data-loc 0x30 --disable-warning 126 --disable-warning 59
-SDCCREV ?= -Dstc15f404as 
+SDCCREV ?= -Dstc15w404as 
 STCGAL ?= stcgal/stcgal.py
-STCGALOPTS ?= --baud 9600
+STCGALOPTS ?= 
 STCGALPORT ?= /dev/ttyUSB0
 STCGALPROT ?= stc15
 FLASHFILE ?= main.hex

@@ -166,15 +166,15 @@ static void read_buttons(void)
 static void display_scan_out(void)
 {
     uint8_t tmp;
-    // display refresh ISR
-    // cycle thru digits one at a time
-    uint8_t digit = displaycounter % (uint8_t) 4;
 
     // turn off all digits, set high
     LED_DIGITS_OFF();
 
     // auto dimming, skip lighting for some cycles
     if (displaycounter < 4 ) {
+        // display refresh ISR
+        // cycle thru digits one at a time
+        uint8_t digit = displaycounter % (uint8_t) 4;
         // fill digits
         LED_SEGMENT_PORT = dbuf[digit];
         // turn on selected digit, set low
@@ -184,9 +184,11 @@ static void display_scan_out(void)
         LED_DIGITS_PORT &= tmp;
     }
     displaycounter++;
+    if(displaycounter > 8)
+        displaycounter = 0;
 }
 
-static uint8_t time_now;
+static volatile uint8_t time_now;
 /*
   interrupt: every 0.1ms=100us come here
 
@@ -195,8 +197,8 @@ static uint8_t time_now;
  */
 void timer0_isr() __interrupt 1 __using 1
 {
-    //display_scan_out();
     //read_buttons();
+    //display_scan_out();
     static uint8_t ms_10timer = 0;
     ms_10timer++;
     if(ms_10timer > 100)
@@ -214,13 +216,15 @@ static void set_timer(uint8_t *timer, uint8_t tmo)
     *timer = time_now + tmo;
 }
 
+/* Keep calling this function to make sure
+ * the timer stays elapsed */
 static uint8_t timer_elapsed(uint8_t *timer)
 {
     uint8_t t = *timer;
     t -= time_now;
     if(t > 0x80)
     {
-        *timer = time_now;
+        *timer = time_now - 1;
         return 1;
     }
     return 0;
@@ -310,10 +314,15 @@ enum StateMachine {
     SM_IS_CLAIM,
     SM_CLAIM_CHECK,
     SM_TTL_CHECK,
+    SM_TTL_CHECK_TIMEOUT,
     SM_MSG_CLAIM,
     SM_IS_CLAIM2,
     SM_BTN,
 };
+
+static void btn_clear(void) {
+    event = EV_NONE;
+}
 
 static uint8_t btn_is_pressed(void) {
     enum Event ev;
@@ -371,23 +380,16 @@ static void statemachine(void)
     static uint8_t beep_timer = 0;
     static uint8_t run_timer = 0;
 
-    static uint8_t t = 0;
-    if (timer_elapsed(&beep_timer))
-    {
-        t ^=1;
-        set_timer(&beep_timer, 1 * TMO_10MS);
-    }
-
-    if(t)
+    if (timer_elapsed(&beep_timer)) {
         beep_off();
-    else {
+    } else {
         beep_on();
     }
 
     if (!timer_elapsed(&run_timer))
         return;
 
-    set_timer(&run_timer, 4 * TMO_100MS);
+    //set_timer(&run_timer, 20 * TMO_10MS);
 
     clearTmpDisplay();
     filldisplay(2, state / 10, 0);
@@ -398,12 +400,13 @@ static void statemachine(void)
     {
         case SM_START:
             state = SM_BTN_INIT;
+            btn_clear();
             break;
 
         case SM_BTN_INIT:
             if (btn_is_pressed()) {
                 id = 'W';
-                send_assign(id+1, 'M'); //Player 1, 30 minutes
+                send_assign(id + 1, 30); //Player 1, 30 minutes
                 state = SM_MSG_MASTER;
             } else {
                 state = SM_MSG_SLAVE;
@@ -419,6 +422,7 @@ static void statemachine(void)
         case SM_IS_ASSIGN_MASTER:
             if(rx_buf[0] == OPC_ASSIGN) {
                 uint8_t ttl = 42 / 8 / 2; //Random...
+                ttl = 200;
                 send_passon(ttl);
                 state = SM_MSG;
             } else {
@@ -493,14 +497,21 @@ static void statemachine(void)
             break;
 
         case SM_TTL_CHECK:
-            if(rx_buf[1] == 0) {
-                send_claim(id);
-                set_timer(&beep_timer, 3 * TMO_100MS);
-                state = SM_MSG_CLAIM;
-            } else {
-                set_timer(&beep_timer, 1 * TMO_10MS);
-                //TODO BEEP
-                //TODO sleep relative to TTL?
+            {
+                uint8_t ttl = rx_buf[1];
+                if(ttl == 0) {
+                    send_claim(id);
+                    set_timer(&beep_timer, 3 * TMO_100MS);
+                    state = SM_MSG_CLAIM;
+                } else {
+                    set_timer(&beep_timer, ((255 - ttl) / 10) * TMO_10MS);
+                    state = SM_TTL_CHECK_TIMEOUT;
+                }
+            }
+            break;
+
+        case SM_TTL_CHECK_TIMEOUT:
+            if(timer_elapsed(&beep_timer)) {
                 send_passon(rx_buf[1] - 1);
                 state = SM_MSG;
             }
@@ -515,6 +526,7 @@ static void statemachine(void)
         case SM_IS_CLAIM2:
             if(rx_buf[0] == OPC_CLAIM) {
                 state = SM_BTN;
+                btn_clear();
             } else {
                 state = SM_PANIC;
             }
