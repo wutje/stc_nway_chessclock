@@ -88,8 +88,6 @@ volatile __bit S1_LONG;
 volatile __bit S1_PRESSED;
 volatile __bit S2_LONG;
 volatile __bit S2_PRESSED;
-volatile __bit S3_LONG;
-volatile __bit S3_PRESSED;
 
 volatile uint8_t debounce[NUM_SW];      // switch debounce buffer
 volatile uint8_t switchcount[NUM_SW];
@@ -108,7 +106,10 @@ enum Event {
 };
 
 
-volatile enum Event event;
+/* This stores the last event.
+ * After reading this should be set to EV_NONE,
+ * new events will not be processed until it is set to EV_NONE */
+static volatile enum Event event;
 
 static void read_buttons(void)
 {
@@ -145,7 +146,6 @@ static void read_buttons(void)
 
     MONITOR_S(1);
     MONITOR_S(2);
-    MONITOR_S(3);
 
     if (ev == EV_S1_LONG && S2_PRESSED) {
         S2_LONG = 1;
@@ -168,6 +168,11 @@ static void display_scan_out(void)
     // turn off all digits, set high
     LED_DIGITS_OFF();
 
+    /* The lower the compare the brighter the leds.
+     * keep >=4 otherwise we loose a digit! */
+    if(++displaycounter > 8)
+        displaycounter = 0;
+
     // auto dimming, skip lighting for some cycles
     if (displaycounter < 4 ) {
         // display refresh ISR
@@ -181,12 +186,12 @@ static void display_scan_out(void)
         tmp = ~((1<<LED_DIGITS_PORT_BASE) << digit);
         LED_DIGITS_PORT &= tmp;
     }
-    displaycounter++;
-    if(displaycounter > 8)
-        displaycounter = 0;
+
 }
 
+/* A overflowing couter couting in steps of 10ms */
 static volatile uint8_t time_now;
+
 /*
   interrupt: every 0.1ms=100us come here
 
@@ -195,14 +200,15 @@ static volatile uint8_t time_now;
  */
 void timer0_isr() __interrupt 1 __using 1
 {
-    //read_buttons();
+    read_buttons();
     //display_scan_out();
     static uint8_t ms_10timer = 0;
-    ms_10timer++;
-    if(ms_10timer > 100)
+
+    /* Count upto 10 ms */
+    if(++ms_10timer > 100)
     {
-        time_now++;
         ms_10timer = 0;
+        time_now++;
     }
 }
 
@@ -301,6 +307,8 @@ int8_t gettemp(uint16_t raw) {
 enum StateMachine {
     SM_START,
     SM_BTN_INIT,
+    SM_BTN_WAIT_FOR_RELEASE,
+    SM_BTN_SETUP_GAME_TIME,
     SM_MSG_MASTER,
     SM_IS_ASSIGN_MASTER,
     SM_MSG_SLAVE,
@@ -320,7 +328,7 @@ enum StateMachine {
 
 static uint8_t btn_is_pressed(void) {
     uint8_t adc = getADCResult8(ADC_LIGHT);
-    return adc > 250;
+    return adc > 240;
 }
 
 static uint8_t msg_available(void) {
@@ -370,20 +378,57 @@ static void print4char(const char* str)
         filldisplay(i, digit);
     }
 }
+
 static void panic_animation(void)
 {
     print4char("FA1L");
 }
 
+static void display_seconds_as_minutes(uint16_t time)
+{
+    uint8_t ten, dig, min = time / 60;
+    ten = (min /  10 )%10;
+    dig = (min /   1 )%10;
+    if(ten)
+        filldisplay(0, ten);
+    filldisplay(1, dig);
+
+    uint8_t sec = time % 60;
+    ten = (sec /  10 )%10;
+    dig = (sec /   1 )%10;
+    filldisplay(2, ten);
+    filldisplay(3, dig);
+
+    /* Always turn on dots to show we have minutes and seconds */
+    dotdisplay(1, 1);
+    dotdisplay(2, 1);
+}
+
+static void display_val(uint8_t val)
+{
+    uint8_t hun = (val / 100 )%10;
+    uint8_t ten = (val /  10 )%10;
+    uint8_t dig = (val /   1 )%10;
+
+    clearTmpDisplay();
+
+    if(hun)
+        filldisplay(1, hun);
+    if(hun || ten)
+        filldisplay(2, ten);
+
+    filldisplay(3, dig);
+}
+
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
-    static uint8_t id;
-    static uint8_t remaining_time;
-    static uint8_t beep_timer = 0;
-    static uint16_t seconds_left;
-    static uint8_t decrement_timer;
+    static uint8_t id = 0; //Default to 'master'
     static uint8_t nr_of_players = 0;
+    static uint16_t seconds_left;
+    static uint8_t game_duration_in_min = 30; //Default to 30 minutes
+    static uint8_t beep_timer = 0;
+    static uint8_t decrement_timer;
     static uint8_t msg_time = 0;
 
     clearTmpDisplay();
@@ -410,16 +455,61 @@ static void statemachine(void)
         case SM_BTN_INIT:
             print4char("PRES");
             if (btn_is_pressed()) {
-                id = 0;
-                remaining_time = 30;
-                seconds_left = remaining_time * 60;
-                send_assign(id + 1, remaining_time); //Player 1, 30 minutes
-                set_timer(&beep_timer, 1 * TMO_10MS);
-                state = SM_MSG_MASTER;
+                state = SM_BTN_WAIT_FOR_RELEASE;
+                set_timer(&decrement_timer, 1 * TMO_SECOND);
             } else {
                 state = SM_MSG_SLAVE;
             }
             break;
+
+        case SM_BTN_WAIT_FOR_RELEASE:
+            print4char("RELA");
+            if(!btn_is_pressed() && timer_elapsed(&decrement_timer))
+                state = SM_BTN_SETUP_GAME_TIME;
+            break;
+
+        case SM_BTN_SETUP_GAME_TIME:
+            {
+                /* Blink! */
+                if(timer_elapsed(&decrement_timer))
+                {
+                    id = !id; //EVIL reuse of id
+                    set_timer(&decrement_timer, 5 * TMO_100MS);
+                }
+
+                if(id) {
+                    /* Also works for hours and minutes :D */
+                    display_seconds_as_minutes(game_duration_in_min);
+                } else {
+                    clearTmpDisplay();
+                }
+
+                if(btn_is_pressed())
+                {
+                    /* We are master, kick off by sending assign */
+                    id = 0;
+                    seconds_left = game_duration_in_min * 60;
+                    send_assign(id + 1, game_duration_in_min); //Next is player 1
+                    set_timer(&beep_timer, 1 * TMO_10MS);
+                    state = SM_MSG_MASTER;
+                } else {
+                    switch(event){
+                        case EV_S1_SHORT:
+                        case EV_S1_LONG:
+                            if(game_duration_in_min < 90)
+                                game_duration_in_min += 5;
+                            break;
+                        case EV_S2_SHORT:
+                        case EV_S2_LONG:
+                            if(game_duration_in_min > 5)
+                                game_duration_in_min -= 5;
+                            break;
+                    }
+                    event = EV_NONE;
+                }
+            }
+            break;
+
 
         case SM_MSG_MASTER:
             if (msg_available()) {
@@ -428,8 +518,9 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN_MASTER:
-            if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == remaining_time) {
-                uint8_t ttl = 42 / 8 / 2; //Random...
+            /* Only accept assign if duration matches */
+            if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min) {
+                uint8_t ttl = 42 / 7 / 2; //Random...
                 ttl = 10;
                 nr_of_players = rx_buf[1]; //last id
                 send_passon(ttl, nr_of_players);
@@ -450,9 +541,9 @@ static void statemachine(void)
         case SM_IS_ASSIGN_SLAVE:
             if(rx_buf[0] == OPC_ASSIGN) {
                 id = rx_buf[1];
-                remaining_time = rx_buf[2];
-                seconds_left = remaining_time * 60;
-                send_assign(id + 1, remaining_time);
+                game_duration_in_min = rx_buf[2];
+                seconds_left = game_duration_in_min * 60;
+                send_assign(id + 1, game_duration_in_min);
                 state = SM_MSG;
             } else {
                 state = SM_PANIC;
@@ -465,10 +556,8 @@ static void statemachine(void)
             break;
 
         case SM_MSG:
-            filldisplay(0, (msg_time / 1000) % 10);
-            filldisplay(1, (msg_time /  100) % 10);
-            filldisplay(2, (msg_time /   10) % 10);
-            filldisplay(3, (msg_time /    1) % 10);
+            /* Display duration of current active player (not us) */
+            display_seconds_as_minutes(msg_time);
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
             }
@@ -534,12 +623,14 @@ static void statemachine(void)
             break;
 
         case SM_TTL_CHECK_TIMEOUT:
+            /* Show the number of players detected during countdown */
+            filldisplay(0, 'P' - 'A' + LED_a);
+            filldisplay(3, nr_of_players);
+
             if(timer_elapsed(&beep_timer)) {
                 send_passon(rx_buf[1] - 1, nr_of_players);
                 state = SM_MSG;
             }
-            filldisplay(0, 'P' - 'A' + LED_a);
-            filldisplay(3, nr_of_players);
             break;
 
         case SM_MSG_CLAIM:
@@ -561,10 +652,8 @@ static void statemachine(void)
             break;
 
         case SM_BTN:
-            filldisplay(0, (seconds_left / 1000) % 10);
-            filldisplay(1, (seconds_left /  100) % 10);
-            filldisplay(2, (seconds_left /   10) % 10);
-            filldisplay(3, (seconds_left /    1) % 10);
+            /* Display duration of current active player (not us) */
+            display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
                 set_timer(&beep_timer, 1 * TMO_10MS);
                 state = SM_MSG;

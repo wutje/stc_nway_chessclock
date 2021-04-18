@@ -123,18 +123,6 @@ ledtable2[]
     0b10110110, //     Z
 };
 
-#if 0
-const char weekDay[][4] = {
-      "SUN",
-      "MON",
-      "TUE",
-      "WED",
-      "THU",
-      "FRI",
-      "SAT",
-};
-#endif
-
 uint8_t tmpbuf[4];
 __bit   dot0;
 __bit   dot1;
