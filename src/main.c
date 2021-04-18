@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "stc15.h"
+#include "uart.h"
 #include "adc.h"
 #include "ds1302.h"
 #include "led.h"
@@ -55,9 +56,7 @@ enum display_mode {
 };
 #define NUM_DEBUG 3
 
-#ifdef DEBUG
-uint8_t hex[] = {0,1,2,3,4,5,6,7,8,9,14,15,16,17,18,19};
-#endif
+static const uint8_t hex[] = {0,1,2,3,4,5,6,7,8,9,14,15,16,17,18,19};
 
 /* ------------------------------------------------------------------------- */
 /*
@@ -108,7 +107,6 @@ enum Event {
     EV_TIMEOUT,
 };
 
-#include "uart.h"
 
 volatile enum Event event;
 
@@ -320,22 +318,9 @@ enum StateMachine {
     SM_TTL_CHECK_TIMEOUT,
 };
 
-static void btn_clear(void) {
-    event = EV_NONE;
-}
-
 static uint8_t btn_is_pressed(void) {
-    enum Event ev;
-
-    ev = event;
-    event = EV_NONE;
-    switch(ev)
-    {
-        case EV_S3_SHORT:
-        case EV_S3_LONG:
-            return 1;
-    }
-    return 0;
+    uint8_t adc = getADCResult8(ADC_LIGHT);
+    return adc > 250;
 }
 
 static uint8_t msg_available(void) {
@@ -362,14 +347,32 @@ static void send_assign(uint8_t your_id, uint8_t time)
     uart1_send_packet(OPC_ASSIGN, your_id, time);
 }
 
-static void send_passon(uint8_t ttl)
+static void send_passon(uint8_t ttl, uint8_t nr_of_players)
 {
-    uart1_send_packet(OPC_PASSON, ttl, 'x');
+    uart1_send_packet(OPC_PASSON, ttl, nr_of_players);
 }
 
 static void send_claim(uint8_t id)
 {
     uart1_send_packet(OPC_CLAIM, id, 'x');
+}
+
+static void print4char(const char* str)
+{
+    for(uint8_t i= 0; i < 4; i++)
+    {
+        uint8_t digit = *str++;
+        if(digit < 'A') {
+            digit -='0';
+        } else {
+            digit -= 'A' - LED_a;
+        }
+        filldisplay(i, digit);
+    }
+}
+static void panic_animation(void)
+{
+    print4char("FA1L");
 }
 
 static void statemachine(void)
@@ -378,7 +381,12 @@ static void statemachine(void)
     static uint8_t id;
     static uint8_t remaining_time;
     static uint8_t beep_timer = 0;
-    static uint8_t run_timer = 0;
+    static uint16_t seconds_left;
+    static uint8_t decrement_timer;
+    static uint8_t nr_of_players = 0;
+    static uint8_t msg_time = 0;
+
+    clearTmpDisplay();
 
     if (timer_elapsed(&beep_timer)) {
         beep_off();
@@ -386,27 +394,27 @@ static void statemachine(void)
         beep_on();
     }
 
-    if (!timer_elapsed(&run_timer))
-        return;
-
-    //set_timer(&run_timer, 20 * TMO_10MS);
-
-    clearTmpDisplay();
-    filldisplay(2, state / 10, 0);
-    filldisplay(3, state % 10, 0);
-    updateTmpDisplay();
+    if(0)
+    if(state != SM_PANIC)
+    {
+        filldisplay(2, state / 10);
+        filldisplay(3, state % 10);
+    }
 
     switch (state)
     {
         case SM_START:
             state = SM_BTN_INIT;
-            btn_clear();
             break;
 
         case SM_BTN_INIT:
+            print4char("PRES");
             if (btn_is_pressed()) {
-                id = 'W';
-                send_assign(id + 1, 30); //Player 1, 30 minutes
+                id = 0;
+                remaining_time = 30;
+                seconds_left = remaining_time * 60;
+                send_assign(id + 1, remaining_time); //Player 1, 30 minutes
+                set_timer(&beep_timer, 1 * TMO_10MS);
                 state = SM_MSG_MASTER;
             } else {
                 state = SM_MSG_SLAVE;
@@ -420,10 +428,11 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN_MASTER:
-            if(rx_buf[0] == OPC_ASSIGN) {
+            if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == remaining_time) {
                 uint8_t ttl = 42 / 8 / 2; //Random...
-                ttl = 200;
-                send_passon(ttl);
+                ttl = 10;
+                nr_of_players = rx_buf[1]; //last id
+                send_passon(ttl, nr_of_players);
                 state = SM_MSG;
             } else {
                 state = SM_PANIC;
@@ -442,6 +451,7 @@ static void statemachine(void)
             if(rx_buf[0] == OPC_ASSIGN) {
                 id = rx_buf[1];
                 remaining_time = rx_buf[2];
+                seconds_left = remaining_time * 60;
                 send_assign(id + 1, remaining_time);
                 state = SM_MSG;
             } else {
@@ -450,15 +460,23 @@ static void statemachine(void)
             break;
 
         case SM_PANIC:
-            //panic_animation();
+            set_timer(&beep_timer, 1 * TMO_10MS);
+            panic_animation();
             break;
 
         case SM_MSG:
+            filldisplay(0, (msg_time / 1000) % 10);
+            filldisplay(1, (msg_time /  100) % 10);
+            filldisplay(2, (msg_time /   10) % 10);
+            filldisplay(3, (msg_time /    1) % 10);
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
-            } else {
-                state = SM_MSG;
-                //DO STUFF WITH DISPLAY
+            }
+            else {
+                if(timer_elapsed(&decrement_timer)) {
+                    msg_time++;
+                    set_timer(&decrement_timer, 1 * TMO_SECOND);
+                }
             }
             break;
 
@@ -490,15 +508,18 @@ static void statemachine(void)
             if(rx_buf[1] == id) {
                 state = SM_MSG;
             } else {
-                //Counter reset voor display
                 send_claim(rx_buf[1]);
                 state = SM_MSG;
             }
+            //Counter reset voor display
+            set_timer(&decrement_timer, 1 * TMO_SECOND);
+            msg_time = 0;
             break;
 
         case SM_TTL_CHECK:
             {
                 uint8_t ttl = rx_buf[1];
+                nr_of_players =  rx_buf[2];
                 if(ttl == 0) {
                     send_claim(id);
                     set_timer(&beep_timer, 3 * TMO_100MS);
@@ -506,15 +527,19 @@ static void statemachine(void)
                 } else {
                     set_timer(&beep_timer, ((255 - ttl) / 10) * TMO_10MS);
                     state = SM_TTL_CHECK_TIMEOUT;
+                    filldisplay(0, 'P' - 'A' + LED_a);
+                    filldisplay(3, nr_of_players);
                 }
             }
             break;
 
         case SM_TTL_CHECK_TIMEOUT:
             if(timer_elapsed(&beep_timer)) {
-                send_passon(rx_buf[1] - 1);
+                send_passon(rx_buf[1] - 1, nr_of_players);
                 state = SM_MSG;
             }
+            filldisplay(0, 'P' - 'A' + LED_a);
+            filldisplay(3, nr_of_players);
             break;
 
         case SM_MSG_CLAIM:
@@ -526,22 +551,39 @@ static void statemachine(void)
         case SM_IS_CLAIM2:
             if(rx_buf[0] == OPC_CLAIM) {
                 state = SM_BTN;
-                btn_clear();
+                set_timer(&decrement_timer, 1 * TMO_SECOND);
+                /* Always have atleast 60 seconds of play */
+                if(seconds_left < 60)
+                    seconds_left = 60;
             } else {
                 state = SM_PANIC;
             }
             break;
 
         case SM_BTN:
+            filldisplay(0, (seconds_left / 1000) % 10);
+            filldisplay(1, (seconds_left /  100) % 10);
+            filldisplay(2, (seconds_left /   10) % 10);
+            filldisplay(3, (seconds_left /    1) % 10);
             if (btn_is_pressed()) {
+                set_timer(&beep_timer, 1 * TMO_10MS);
                 state = SM_MSG;
-                send_passon(0); // 0 = next
+                send_passon(0, nr_of_players); // 0 = next
             }
             else {
-                //TODO decrement timer
+                if(timer_elapsed(&decrement_timer)) {
+                    set_timer(&decrement_timer, 1 * TMO_SECOND);
+
+                    if(seconds_left)
+                        seconds_left--;
+                    else
+                        set_timer(&beep_timer, 1 * TMO_10MS);
+                }
             }
             break;
     }
+
+    updateTmpDisplay();
 }
 
 /*********************************************/
@@ -564,7 +606,6 @@ int main()
         static uint16_t tick_counter = 0;
         tick_counter++;
         display_scan_out();
-        read_buttons();
         statemachine();
 
         __critical {
