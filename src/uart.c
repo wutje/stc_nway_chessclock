@@ -15,6 +15,7 @@
 #define SYNC_BYTE 's'
 enum ISR_STATE {
     ISR_STATE_SYNC,
+    ISR_STATE_CNTR,
     ISR_STATE_OPC,
     ISR_STATE_DATA0,
     ISR_STATE_DATA1,
@@ -55,7 +56,7 @@ static uint8_t calc_checksum(uint8_t opc, uint8_t data0, uint8_t data1)
 
 void uart1_isr() __interrupt 4 __using 2
 {
-
+    static uint8_t cntr = 0;
     /* Receive interrupt */
     if (RI) {
         RI = 0;                 // clear inta
@@ -68,6 +69,7 @@ void uart1_isr() __interrupt 4 __using 2
                     isr_rx_state++;
                 break;
 
+            case ISR_STATE_CNTR: cntr = rx_byte; isr_rx_state++; break;
             case ISR_STATE_OPC: rx_buf[0] = rx_byte; isr_rx_state++; break;
             case ISR_STATE_DATA0: rx_buf[1] = rx_byte; isr_rx_state++; break;
             case ISR_STATE_DATA1: rx_buf[2] = rx_byte; isr_rx_state++; break;
@@ -94,6 +96,7 @@ void uart1_isr() __interrupt 4 __using 2
                 //IDLE!
                 break;
 
+            case ISR_STATE_CNTR:  SBUF = cntr + 1; isr_tx_state++; break;
             case ISR_STATE_OPC:   SBUF = tx_buf[0]; isr_tx_state++; break;
             case ISR_STATE_DATA0: SBUF = tx_buf[1]; isr_tx_state++; break;
             case ISR_STATE_DATA1: SBUF = tx_buf[2]; isr_tx_state++; break;
@@ -125,12 +128,13 @@ void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1)
     /* Normal code */
     else
     {
+        rx_packet_available = 0; //Clear just in case
         tx_buf[0] = opc;
         tx_buf[1] = data0;
         tx_buf[2] = data1;
         tx_buf[3] = calc_checksum(tx_buf[0], tx_buf[1], tx_buf[2]);
         /* Start ISR by sending the first byte */
-        isr_tx_state = ISR_STATE_OPC;
+        isr_tx_state = ISR_STATE_CNTR;
         SBUF = SYNC_BYTE;
     }
 }

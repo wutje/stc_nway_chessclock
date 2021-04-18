@@ -104,6 +104,7 @@ void uart1_isr() __interrupt 4 __using 2
 
 void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1)
 {
+    rx_packet_available = false;
     tx_buf[0] = opc;
     tx_buf[1] = data0;
     tx_buf[2] = data1;

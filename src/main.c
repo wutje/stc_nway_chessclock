@@ -279,6 +279,7 @@ static void Timer0Init(void)		//100us @ 11.0592MHz
     ET0 = 1;        // Enable timer0 interrupt
 }
 
+#if 0
 // Formula was : 76-raw*64/637 - which makes use of integer mult/div routines
 // Getting degF from degC using integer was not good as values were sometimes jumping by 2
 // The floating point one is even worse in term of code size generated (>1024bytes...)
@@ -302,7 +303,7 @@ int8_t gettemp(uint16_t raw) {
 
     return temp + (cfg_table[CFG_TEMP_BYTE] & CFG_TEMP_MASK) - 4;
 }
-
+#endif
 
 enum StateMachine {
     SM_START,
@@ -328,7 +329,7 @@ enum StateMachine {
 
 static uint8_t btn_is_pressed(void) {
     uint8_t adc = getADCResult8(ADC_LIGHT);
-    return adc > 240;
+    return adc > 220;
 }
 
 static uint8_t msg_available(void) {
@@ -342,7 +343,7 @@ static uint8_t msg_available(void) {
 
 static void beep_on(void)
 {
-    BUZZER_ON;
+    //BUZZER_ON;
 }
 
 static void beep_off(void)
@@ -377,11 +378,6 @@ static void print4char(const char* str)
         }
         filldisplay(i, digit);
     }
-}
-
-static void panic_animation(void)
-{
-    print4char("FA1L");
 }
 
 static void display_seconds_as_minutes(uint16_t time)
@@ -420,6 +416,15 @@ static void display_val(uint8_t val)
     filldisplay(3, dig);
 }
 
+
+static enum StateMachine err;
+
+static void panic_animation(void)
+{
+    display_val(err);
+    filldisplay(0,'F' - 'A' + LED_a);
+}
+
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
@@ -439,11 +444,11 @@ static void statemachine(void)
         beep_on();
     }
 
-    if(0)
     if(state != SM_PANIC)
     {
-        filldisplay(2, state / 10);
-        filldisplay(3, state % 10);
+        err = state;
+        //filldisplay(2, state / 10);
+        //filldisplay(3, state % 10);
     }
 
     switch (state)
@@ -453,7 +458,15 @@ static void statemachine(void)
             break;
 
         case SM_BTN_INIT:
-            print4char("PRES");
+            if(0)
+            {
+                print4char("PRES");
+            }
+            else {
+                /* Debug ADC */
+                display_val(getADCResult8(ADC_LIGHT));
+                filldisplay(0, 'P' - 'A' + LED_a);
+            }
             if (btn_is_pressed()) {
                 state = SM_BTN_WAIT_FOR_RELEASE;
                 set_timer(&decrement_timer, 1 * TMO_SECOND);
@@ -512,6 +525,7 @@ static void statemachine(void)
 
 
         case SM_MSG_MASTER:
+            print4char("ACCU");
             if (msg_available()) {
                 state = SM_IS_ASSIGN_MASTER;
             }
@@ -520,7 +534,7 @@ static void statemachine(void)
         case SM_IS_ASSIGN_MASTER:
             /* Only accept assign if duration matches */
             if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min) {
-                uint8_t ttl = 42 / 7 / 2; //Random...
+                uint8_t ttl = 42; //Random...
                 ttl = 10;
                 nr_of_players = rx_buf[1]; //last id
                 send_passon(ttl, nr_of_players);
@@ -671,6 +685,13 @@ static void statemachine(void)
             }
             break;
     }
+    if (tmpbuf[0]==LED_BLANK &&
+            tmpbuf[1]==LED_BLANK &&
+            tmpbuf[2]==LED_BLANK &&
+            tmpbuf[3]==LED_BLANK)
+    {
+        display_val(state);
+    }
 
     updateTmpDisplay();
 }
@@ -680,8 +701,8 @@ int main()
 {
     // SETUP
     // set photoresistor & ntc pins to open-drain output
-    P1M1 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP) | (1<<5);
-    P1M0 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP) | (1<<5);
+    P1M1 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
+    P1M0 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
 
     Timer0Init(); // display refresh & switch read
 
