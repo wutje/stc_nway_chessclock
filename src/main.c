@@ -22,63 +22,6 @@
 // hardware configuration
 #include "hwconfig.h"
 
-// keyboard mode states
-enum keyboard_mode {
-    K_NORMAL,
-};
-
-// display mode states
-enum display_mode {
-    M_NORMAL,
-    M_SET_HOUR_12_24,
-#ifdef WITH_NMEA
-    M_TZ_SET_TIME,
-    M_TZ_SET_DST,
-#endif
-    M_SEC_DISP,
-    M_TEMP_DISP,
-#ifndef WITHOUT_DATE
-    M_DATE_DISP,
-#endif
-    M_WEEKDAY_DISP,
-    M_YEAR_DISP,
-#ifndef WITHOUT_ALARM
-    M_ALARM,
-#endif
-#ifndef WITHOUT_CHIME
-    M_CHIME,
-#endif
-#ifdef DEBUG
-    M_DEBUG,
-    M_DEBUG2,
-    M_DEBUG3,
-#endif
-};
-#define NUM_DEBUG 3
-
-static const uint8_t hex[] = {0,1,2,3,4,5,6,7,8,9,14,15,16,17,18,19};
-
-/* ------------------------------------------------------------------------- */
-/*
-void _delay_ms(uint8_t ms)
-{
-    // delay function, tuned for 11.092 MHz clock
-    // optimized to assembler
-    ms; // keep compiler from complaining?
-    __asm;
-        ; dpl contains ms param value
-    delay$:
-        mov	b, #8   ; i
-    outer$:
-        mov	a, #243    ; j
-    inner$:
-        djnz acc, inner$
-        djnz b, outer$
-        djnz dpl, delay$
-    __endasm;
-}
-*/
-
 uint8_t  temp;      // temperature sensor value
 uint8_t  lightval;  // light sensor value
 
@@ -177,7 +120,7 @@ static void display_scan_out(void)
     if (displaycounter < 4 ) {
         // display refresh ISR
         // cycle thru digits one at a time
-        uint8_t digit = displaycounter % (uint8_t) 4;
+        uint8_t digit = displaycounter;
         // fill digits
         LED_SEGMENT_PORT = dbuf[digit];
         // turn on selected digit, set low
@@ -380,6 +323,13 @@ static void print4char(const char* str)
     }
 }
 
+/* Works for :
+ * seconds to minutes:seconds
+ * minutes to hours:minutes
+ *
+ * It will not display a leading 0
+ *
+ * */
 static void display_seconds_as_minutes(uint16_t time)
 {
     uint8_t ten, dig, min = time / 60;
@@ -400,11 +350,12 @@ static void display_seconds_as_minutes(uint16_t time)
     dotdisplay(2, 1);
 }
 
+/* Display an uint8_t on the last 3 digit */
 static void display_val(uint8_t val)
 {
-    uint8_t hun = (val / 100 )%10;
-    uint8_t ten = (val /  10 )%10;
-    uint8_t dig = (val /   1 )%10;
+    uint8_t hun = (val / 100 ) % 10;
+    uint8_t ten = (val /  10 ) % 10;
+    uint8_t dig = (val /   1 ) % 10;
 
     clearTmpDisplay();
 
@@ -416,7 +367,7 @@ static void display_val(uint8_t val)
     filldisplay(3, dig);
 }
 
-
+/* The last state before we reached the panic state */
 static enum StateMachine err;
 
 static void panic_animation(void)
@@ -444,11 +395,10 @@ static void statemachine(void)
         beep_on();
     }
 
+    /* Save last state before panic so in panic we can show it */
     if(state != SM_PANIC)
     {
         err = state;
-        //filldisplay(2, state / 10);
-        //filldisplay(3, state % 10);
     }
 
     switch (state)
@@ -499,7 +449,7 @@ static void statemachine(void)
 
                 if(btn_is_pressed())
                 {
-                    /* We are master, kick off by sending assign */
+                    /* We are master! kick off by sending assign */
                     id = 0;
                     seconds_left = game_duration_in_min * 60;
                     send_assign(id + 1, game_duration_in_min); //Next is player 1
@@ -523,7 +473,6 @@ static void statemachine(void)
             }
             break;
 
-
         case SM_MSG_MASTER:
             print4char("ACCU");
             if (msg_available()) {
@@ -535,7 +484,6 @@ static void statemachine(void)
             /* Only accept assign if duration matches */
             if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min) {
                 uint8_t ttl = 42; //Random...
-                ttl = 10;
                 nr_of_players = rx_buf[1]; //last id
                 send_passon(ttl, nr_of_players);
                 state = SM_MSG;
@@ -554,6 +502,9 @@ static void statemachine(void)
 
         case SM_IS_ASSIGN_SLAVE:
             if(rx_buf[0] == OPC_ASSIGN) {
+                /* Yeah! we got an assign message:
+                 * save our id
+                 * and the game time */
                 id = rx_buf[1];
                 game_duration_in_min = rx_buf[2];
                 seconds_left = game_duration_in_min * 60;
@@ -622,7 +573,7 @@ static void statemachine(void)
         case SM_TTL_CHECK:
             {
                 uint8_t ttl = rx_buf[1];
-                nr_of_players =  rx_buf[2];
+                nr_of_players = rx_buf[2];
                 if(ttl == 0) {
                     send_claim(id);
                     set_timer(&beep_timer, 3 * TMO_100MS);
@@ -630,8 +581,6 @@ static void statemachine(void)
                 } else {
                     set_timer(&beep_timer, ((255 - ttl) / 10) * TMO_10MS);
                     state = SM_TTL_CHECK_TIMEOUT;
-                    filldisplay(0, 'P' - 'A' + LED_a);
-                    filldisplay(3, nr_of_players);
                 }
             }
             break;
@@ -655,11 +604,11 @@ static void statemachine(void)
 
         case SM_IS_CLAIM2:
             if(rx_buf[0] == OPC_CLAIM) {
-                state = SM_BTN;
                 set_timer(&decrement_timer, 1 * TMO_SECOND);
                 /* Always have atleast 60 seconds of play */
                 if(seconds_left < 60)
                     seconds_left = 60;
+                state = SM_BTN;
             } else {
                 state = SM_PANIC;
             }
@@ -670,8 +619,8 @@ static void statemachine(void)
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
                 set_timer(&beep_timer, 1 * TMO_10MS);
-                state = SM_MSG;
                 send_passon(0, nr_of_players); // 0 = next
+                state = SM_MSG;
             }
             else {
                 if(timer_elapsed(&decrement_timer)) {
@@ -685,10 +634,13 @@ static void statemachine(void)
             }
             break;
     }
+
+    /* If nothing on screen, show current state.
+     * Usefull debugging aid. */
     if (tmpbuf[0]==LED_BLANK &&
-            tmpbuf[1]==LED_BLANK &&
-            tmpbuf[2]==LED_BLANK &&
-            tmpbuf[3]==LED_BLANK)
+        tmpbuf[1]==LED_BLANK &&
+        tmpbuf[2]==LED_BLANK &&
+        tmpbuf[3]==LED_BLANK)
     {
         display_val(state);
     }
@@ -713,8 +665,6 @@ int main()
     // LOOP
     while (1)
     {
-        static uint16_t tick_counter = 0;
-        tick_counter++;
         display_scan_out();
         statemachine();
 
