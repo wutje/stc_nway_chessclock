@@ -280,11 +280,12 @@ enum StateMachine {
 
 static uint8_t btn_is_pressed(void) {
     uint8_t adc = getADCResult8(ADC_LIGHT);
-    return adc > 220;
+    return adc > 150;
 }
 
 static uint8_t msg_available(void) {
     uint8_t rx;
+    /* Test&clear in atomically */
     __critical {
         rx = rx_packet_available;
         rx_packet_available = 0;
@@ -317,17 +318,19 @@ static void send_claim(uint8_t id)
     uart1_send_packet(OPC_CLAIM, id, 'x');
 }
 
+/* Displaying chars is non-trivial, so I added this convenience macro */
+#define display_char(_pos, _char) {filldisplay(_pos, _char - 'A' + LED_a); }
+
 static void print4char(const char* str)
 {
     for(uint8_t i= 0; i < 4; i++)
     {
         uint8_t digit = *str++;
         if(digit < 'A') {
-            digit -='0';
+            filldisplay(i, digit - '0');
         } else {
-            digit -= 'A' - LED_a;
+            display_char(i, digit);
         }
-        filldisplay(i, digit);
     }
 }
 
@@ -381,7 +384,7 @@ static enum StateMachine err;
 static void panic_animation(void)
 {
     display_val(err);
-    filldisplay(0,'F' - 'A' + LED_a);
+    display_char(0, 'F');
 }
 
 static void statemachine(void)
@@ -423,11 +426,11 @@ static void statemachine(void)
             else {
                 /* Debug ADC */
                 display_val(getADCResult8(ADC_LIGHT));
-                filldisplay(0, 'P' - 'A' + LED_a);
+                display_char(0, 'P');
             }
             if (btn_is_pressed()) {
-                state = SM_BTN_WAIT_FOR_RELEASE;
                 set_timer(&decrement_timer, 1 * TMO_SECOND);
+                state = SM_BTN_WAIT_FOR_RELEASE;
             } else {
                 state = SM_MSG_SLAVE;
             }
@@ -587,8 +590,12 @@ static void statemachine(void)
             break;
 
         case SM_TTL_CHECK_TIMEOUT:
-            /* Show the number of players detected during countdown */
-            filldisplay(0, 'P' - 'A' + LED_a);
+            /* Show the number of players detected during countdown:
+             * P1-2 for player 1 of 2
+             * */
+            display_char(0, 'P');
+            filldisplay(1, id);
+            filldisplay(2, LED_DASH);
             filldisplay(3, nr_of_players);
 
             if(timer_elapsed(&beep_timer)) {
@@ -646,7 +653,11 @@ static void statemachine(void)
         display_val(state);
     }
 
-    updateTmpDisplay();
+    /* Copy buffer to buffer used by ISR to scan out */
+    __critical {
+        updateTmpDisplay();
+    }
+
 }
 
 /*********************************************/
@@ -668,10 +679,6 @@ int main()
     {
         display_scan_out();
         statemachine();
-
-        __critical {
-            updateTmpDisplay();
-        }
 
         WDT_CLEAR();
     }
