@@ -9,7 +9,7 @@ STCGALPROT ?= stc15
 FLASHFILE ?= main.hex
 SYSCLK ?= 11059
 CFLAGS ?= -DFOSC=$(SYSCLK)200 -D WITH_ALT_LED9 -D WITHOUT_LEDTABLE_RELOC 
-SRC = src/uart.c src/adc.c
+SRC = src/uart.c src/adc.c src/timer0.c
 
 OBJ=$(patsubst src%.c,build%.rel, $(SRC))
 

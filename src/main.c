@@ -3,15 +3,28 @@
 // Copyright 2016, Jens Jensen
 //
 
-// silence: "src/main.c:672: warning 126: unreachable code"
-#pragma disable_warning 126
-
 #include <stdint.h>
 #include <stdio.h>
+#ifdef __GNUC__
+#define __bit uint8_t
+#define __interrupt
+#define __at(_1)
+#define __critical
+extern volatile uint8_t P2 ;
+extern volatile uint8_t P3 ;
+extern volatile uint8_t P3_1 ;
+extern volatile uint8_t P3_0 ;
+extern volatile uint8_t P1M0 ;
+extern volatile uint8_t P1M1 ;
+extern volatile uint8_t EA;
+extern volatile uint8_t WDT_CONTR;
+#else
 #include "stc15.h"
+#endif
+
 #include "uart.h"
 #include "adc.h"
-#include "ds1302.h"
+#include "timer0.h"
 #include "led.h"
 
 //#define DEBUG
@@ -22,10 +35,7 @@
 // hardware configuration
 #include "hwconfig.h"
 
-uint8_t  temp;      // temperature sensor value
-uint8_t  lightval;  // light sensor value
 
-volatile uint8_t displaycounter;
 
 volatile __bit S1_LONG;
 volatile __bit S1_PRESSED;
@@ -107,6 +117,7 @@ static void read_buttons(void)
 static void display_scan_out(void)
 {
     uint8_t tmp;
+    static uint8_t displaycounter = 0;
 
     // turn off all digits, set high
     LED_DIGITS_OFF();
@@ -128,38 +139,6 @@ static void display_scan_out(void)
         // issue #32, fix for newer sdcc versions which are using non-atomic port access
         tmp = ~((1<<LED_DIGITS_PORT_BASE) << digit);
         LED_DIGITS_PORT &= tmp;
-    }
-}
-
-/* A overflowing couter couting in steps of 10ms
- * Bit 0 = 10ms
- * Bit 1 = 20ms
- * Bit 2 = 40ms
- * Bit 3 = 80ms
- * Bit 4 = 160ms
- * Bit 5 = 320ms
- * Bit 6 = 640ms
- * Bit 7 = 1280ms */
-#define TICK_320MS  (1<<5)
-static volatile uint8_t time_now;
-
-/*
-  interrupt: every 0.1ms=100us come here
-
-  Check button status
-  Dynamically LED turn on
- */
-void timer0_isr() __interrupt 1 __using 1
-{
-    read_buttons();
-    //display_scan_out();
-    static uint8_t ms_10timer = 0;
-
-    /* Count upto 10 ms */
-    if(++ms_10timer > 100)
-    {
-        ms_10timer = 0;
-        time_now++;
     }
 }
 
@@ -213,24 +192,8 @@ static uint8_t timer_elapsed(uint8_t *timer)
 }
 */
 
-// Call timer0_isr() 10000/sec: 0.0001 sec
-// Initialize the timer count so that it overflows after 0.0001 sec
-// THTL = 0x10000 - FOSC / 12 / 10000 = 0x10000 - 92.16 = 65444 = 0xFFA4
-// When 11.0592MHz clock case, set every 100us interruption
-static void Timer0Init(void)		//100us @ 11.0592MHz
-{
-    // refer to section 7 of datasheet: STC15F2K60S2-en2.pdf
-    // TMOD = 0;    // default: 16-bit auto-reload
-    // AUXR = 0;    // default: traditional 8051 timer frequency of FOSC / 12
-    // Initial values of TL0 and TH0 are stored in hidden reload registers: RL_TL0 and RL_TH0
-    TL0 = 0xA4;		// Initial timer value
-    TH0 = 0xFF;		// Initial timer value
-    TF0 = 0;		// Clear overflow flag
-    TR0 = 1;		// Timer0 start run
-    ET0 = 1;        // Enable timer0 interrupt
-}
-
 #if 0
+uint8_t  temp;      // temperature sensor value
 // Formula was : 76-raw*64/637 - which makes use of integer mult/div routines
 // Getting degF from degC using integer was not good as values were sometimes jumping by 2
 // The floating point one is even worse in term of code size generated (>1024bytes...)
@@ -290,16 +253,6 @@ static uint8_t msg_available(void) {
         rx_packet_available = 0;
     }
     return rx;
-}
-
-static void beep_on(void)
-{
-    //BUZZER_ON;
-}
-
-static void beep_off(void)
-{
-    BUZZER_OFF;
 }
 
 static void send_assign(uint8_t your_id, uint8_t time)
@@ -386,6 +339,18 @@ static void panic_animation(void)
     display_char(0, 'F');
 }
 
+static uint8_t beep_timer = 0;
+
+static void handle_beep(void)
+{
+    if (timer_elapsed(&beep_timer)) {
+        BUZZER_OFF;
+    } else {
+        if(0)
+            BUZZER_ON;
+    }
+}
+
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
@@ -393,27 +358,19 @@ static void statemachine(void)
     static uint8_t nr_of_players = 0;
     static uint16_t seconds_left;
     static uint8_t game_duration_in_min = 30; //Default to 30 minutes
-    static uint8_t beep_timer = 0;
     static uint8_t decrement_timer;
     static uint8_t other_player_time = 0;
     static uint8_t statemachine_delay = 0;
 
-    if (timer_elapsed(&beep_timer)) {
-        beep_off();
-    } else {
-        beep_on();
-    }
-
     /* If state machine should wait, do so */
-    if(!timer_elapsed(&statemachine_delay))
-    {
+    if(!timer_elapsed(&statemachine_delay)) {
         return;
     }
 
     clearTmpDisplay();
+
     /* Save last state before panic so in panic we can show it */
-    if(state != SM_PANIC)
-    {
+    if(state != SM_PANIC) {
         err = state;
     }
 
@@ -476,8 +433,12 @@ static void statemachine(void)
                             if(game_duration_in_min > 5)
                                 game_duration_in_min -= 5;
                             break;
+                        default:
+                            break;
                     }
-                    event = EV_NONE;
+                    /* We handled the event so clear it */
+                    if(event != EV_NONE)
+                        event = EV_NONE;
                 }
             }
             break;
@@ -596,7 +557,7 @@ static void statemachine(void)
                     set_timer(&beep_timer, tmo);
 
                     /* Add 'silence' by waiting a little longer before continuing */
-                    set_timer(&statemachine_delay, tmo + TMO_100MS);
+                    set_timer(&statemachine_delay, tmo + 2 * TMO_10MS);
 
                     /* Show the number of players detected during countdown:
                      * for player 1 of 2 it show "P1-2" */
@@ -677,7 +638,7 @@ int main()
     P1M1 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
     P1M0 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
 
-    Timer0Init(); // display refresh & switch read
+    timer0_init(); // display refresh & switch read
 
     uart1_init();   // setup uart
 
@@ -686,6 +647,8 @@ int main()
     // LOOP
     while (1)
     {
+        handle_beep();
+        read_buttons();
         display_scan_out();
         statemachine();
 

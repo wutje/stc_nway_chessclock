@@ -19,5 +19,7 @@ void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1);
 void uart1_send_byte(uint8_t b);
 
 //Because it is needed in the file containing main
+#ifndef __GNUC__
 void uart1_isr() __interrupt 4 __using 2;
+#endif
 #endif
