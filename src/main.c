@@ -129,10 +129,18 @@ static void display_scan_out(void)
         tmp = ~((1<<LED_DIGITS_PORT_BASE) << digit);
         LED_DIGITS_PORT &= tmp;
     }
-
 }
 
-/* A overflowing couter couting in steps of 10ms */
+/* A overflowing couter couting in steps of 10ms
+ * Bit 0 = 10ms
+ * Bit 1 = 20ms
+ * Bit 2 = 40ms
+ * Bit 3 = 80ms
+ * Bit 4 = 160ms
+ * Bit 5 = 320ms
+ * Bit 6 = 640ms
+ * Bit 7 = 1280ms */
+#define TICK_320MS  (1<<5)
 static volatile uint8_t time_now;
 
 /*
@@ -433,14 +441,7 @@ static void statemachine(void)
 
         case SM_BTN_SETUP_GAME_TIME:
             {
-                /* Blink! */
-                if(timer_elapsed(&decrement_timer))
-                {
-                    id = !id; //EVIL reuse of id
-                    set_timer(&decrement_timer, 5 * TMO_100MS);
-                }
-
-                if(id) {
+                if(time_now & TICK_320MS) {
                     /* Also works for hours and minutes :D */
                     display_seconds_as_minutes(game_duration_in_min);
                 } else {
