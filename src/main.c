@@ -275,7 +275,6 @@ enum StateMachine {
     SM_MSG_CLAIM,
     SM_IS_CLAIM2,
     SM_BTN,
-    SM_TTL_CHECK_TIMEOUT,
 };
 
 static uint8_t btn_is_pressed(void) {
@@ -396,9 +395,8 @@ static void statemachine(void)
     static uint8_t game_duration_in_min = 30; //Default to 30 minutes
     static uint8_t beep_timer = 0;
     static uint8_t decrement_timer;
-    static uint8_t msg_time = 0;
-
-    clearTmpDisplay();
+    static uint8_t other_player_time = 0;
+    static uint8_t statemachine_delay = 0;
 
     if (timer_elapsed(&beep_timer)) {
         beep_off();
@@ -406,6 +404,13 @@ static void statemachine(void)
         beep_on();
     }
 
+    /* If state machine should wait, do so */
+    if(!timer_elapsed(&statemachine_delay))
+    {
+        return;
+    }
+
+    clearTmpDisplay();
     /* Save last state before panic so in panic we can show it */
     if(state != SM_PANIC)
     {
@@ -525,14 +530,14 @@ static void statemachine(void)
             break;
 
         case SM_MSG:
-            /* Display duration of current active player (not us) */
-            display_seconds_as_minutes(msg_time);
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
             }
             else {
+                /* Display duration of current active player (not us) */
+                display_seconds_as_minutes(other_player_time);
                 if(timer_elapsed(&decrement_timer)) {
-                    msg_time++;
+                    other_player_time++;
                     set_timer(&decrement_timer, 1 * TMO_SECOND);
                 }
             }
@@ -563,15 +568,18 @@ static void statemachine(void)
             break;
 
         case SM_CLAIM_CHECK:
-            if(rx_buf[1] == id) {
-                state = SM_MSG;
-            } else {
-                send_claim(rx_buf[1]);
-                state = SM_MSG;
+            {
+                uint8_t other_id = rx_buf[1];
+                if(other_id == id) {
+                    state = SM_MSG;
+                } else {
+                    send_claim(other_id);
+                    state = SM_MSG;
+                }
+                //Counter reset voor display
+                set_timer(&decrement_timer, 1 * TMO_SECOND);
+                other_player_time = 0;
             }
-            //Counter reset voor display
-            set_timer(&decrement_timer, 1 * TMO_SECOND);
-            msg_time = 0;
             break;
 
         case SM_TTL_CHECK:
@@ -583,24 +591,25 @@ static void statemachine(void)
                     set_timer(&beep_timer, 3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
-                    set_timer(&beep_timer, ((255 - ttl) / 10) * TMO_10MS);
-                    state = SM_TTL_CHECK_TIMEOUT;
+                    /* TTL != 0 means we are in discovery mode! */
+                    uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
+                    set_timer(&beep_timer, tmo);
+
+                    /* Add 'silence' by waiting a little longer before continuing */
+                    set_timer(&statemachine_delay, tmo + TMO_100MS);
+
+                    /* Show the number of players detected during countdown:
+                     * for player 1 of 2 it show "P1-2" */
+                    display_char(0, 'P');
+                    filldisplay(1, id);
+                    filldisplay(2, LED_DASH);
+                    filldisplay(3, nr_of_players);
+
+                    /* Send message straight away,
+                     * we will wait before processing another */
+                    send_passon(rx_buf[1] - 1, nr_of_players);
+                    state = SM_MSG;
                 }
-            }
-            break;
-
-        case SM_TTL_CHECK_TIMEOUT:
-            /* Show the number of players detected during countdown:
-             * P1-2 for player 1 of 2
-             * */
-            display_char(0, 'P');
-            filldisplay(1, id);
-            filldisplay(2, LED_DASH);
-            filldisplay(3, nr_of_players);
-
-            if(timer_elapsed(&beep_timer)) {
-                send_passon(rx_buf[1] - 1, nr_of_players);
-                state = SM_MSG;
             }
             break;
 
