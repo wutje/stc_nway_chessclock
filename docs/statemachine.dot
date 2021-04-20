@@ -1,0 +1,67 @@
+digraph G {
+    graph [layout = dot]
+
+    subgraph cluster_0 {
+        label = "setup";
+        node [style = filled];
+        SM_START [label = "SM_START (0)", shape=doublecircle];
+        SM_BTN_INIT [label = "SM_BTN_INIT (1)\nButton pressed?"];
+        SM_MSG_MASTER [label = "SM_MSG_MASTER (2)\nGot msg?"];
+        SM_IS_ASSIGN_MASTER [label = "SM_IS_ASSIGN_MASTER (3)\nAssign msg?"];
+        SM_MSG_SLAVE [label = "SM_MSG_SLAVE (4)\nGot msg?"];
+        SM_IS_ASSIGN_SLAVE [label = "SM_IS_ASSIGN_SLAVE (5)\nAssign msg?"];
+    }
+
+    SM_PANIC [label = "SM_PANIC (6)", shape = doublecircle, style = filled, color = red];
+
+    subgraph cluster_1 {
+        label = "Game State";
+        node [style = filled];
+
+        SM_MSG [label = "SM_MSG (7)\nGot msg?", shape=doublecircle];
+
+        SM_IS_ASSIGN [color = ".9, .9, .9", label = "SM_IS_ASSIGN (8)\nAssign msg?"];
+        SM_IS_PASS [color =  ".9, .9, .9", label = "SM_IS_PASS (9)\nPass msg?"];
+        SM_IS_CLAIM [color =   ".9, .9, .9", label = "SM_IS_CLAIM (10)\nCleam msg?"];
+
+        SM_CLAIM_CHECK [label = "SM_CLAIM_CHECK (11)\nClaim.id=ID?"];
+        SM_TTL_CHECK [label = "SM_TTL_CHECK (12)\nTTL=0?"];
+        SM_MSG_CLAIM [label = "SM_MSG_CLAIM (13)\nGot msg?"];
+        SM_IS_CLAIM2 [label = "SM_IS_CLAIM2 (14)\nClaim msg?"];
+        SM_BTN [label = "SM_BTN (15)\nButton pressed?"];
+        SM_TTL_CHECK_TIMEOUT [label = "SM_TTL_CHECK_TIMEOUT (16)\nSecond passed?"];
+    }
+
+    SM_START -> SM_BTN_INIT;
+    SM_BTN_INIT -> SM_MSG_MASTER [label = "Y,\nID←0,\nTIME_REM=30,\nassign(ID+1, TIME_REM)"];
+    SM_BTN_INIT -> SM_MSG_SLAVE [label = "N"];
+    SM_MSG_MASTER -> SM_IS_ASSIGN_MASTER [label = "Y"];
+    SM_MSG_MASTER -> SM_MSG_MASTER [label = "N"];
+    SM_IS_ASSIGN_MASTER -> SM_MSG [label = "Y, TTL←30,\nNPLAYERS←(msg),\npasson(TTL, NPLAYERS)"];
+    SM_IS_ASSIGN_MASTER -> SM_PANIC [label = "N"];
+    SM_MSG_SLAVE -> SM_IS_ASSIGN_SLAVE [label = "Y"];
+    SM_MSG_SLAVE -> SM_BTN_INIT [label = "N"];
+    SM_IS_ASSIGN_SLAVE -> SM_MSG [label = "Y,\nTIME_REM←(msg),\nassign(ID+1, TIME_REM)"];
+    SM_IS_ASSIGN_SLAVE -> SM_PANIC [label = "N"];
+    SM_PANIC -> SM_PANIC [label = "PANIC"];
+    SM_MSG -> SM_IS_ASSIGN [label = "Y"];
+    SM_MSG -> SM_MSG [label = "N, MSG_TIME++"];
+    SM_IS_ASSIGN -> SM_PANIC [label = "Y"];
+    SM_IS_ASSIGN -> SM_IS_PASS [label = "N"];
+    SM_IS_PASS -> SM_TTL_CHECK [label = "Y"];
+    SM_IS_PASS -> SM_IS_CLAIM [label = "N"];
+    SM_IS_CLAIM -> SM_CLAIM_CHECK [label = "Y"];
+    SM_IS_CLAIM -> SM_PANIC [label = "N"];
+    SM_CLAIM_CHECK -> SM_MSG [label = "Y,\nMSG_TIME←0"];
+    SM_CLAIM_CHECK -> SM_MSG [label = "N,\nMSG_TIME←0,\nforward claim"];
+    SM_TTL_CHECK -> SM_MSG_CLAIM [label = "Y,\nNPLAYERS←(msg),\nTTL←(msg),\nclaim(ID)"];
+    SM_TTL_CHECK -> SM_TTL_CHECK_TIMEOUT [label = "N"];
+    SM_TTL_CHECK_TIMEOUT -> SM_MSG [label = "Y,\npasson(msg.ttl-1, NPLAYERS)"];
+    SM_TTL_CHECK_TIMEOUT -> SM_TTL_CHECK_TIMEOUT [label = "N"];
+    SM_MSG_CLAIM -> SM_IS_CLAIM2 [label = "Y"];
+    SM_MSG_CLAIM -> SM_MSG_CLAIM [label = "N"];
+    SM_IS_CLAIM2 -> SM_BTN [label = "Y"];
+    SM_IS_CLAIM2 -> SM_PANIC [label = "N"];
+    SM_BTN -> SM_MSG [label = "Y,\npasson(ttl=0, NPLAYERS)"];
+    SM_BTN -> SM_BTN [label = "N"];
+}
