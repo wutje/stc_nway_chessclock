@@ -12,6 +12,7 @@
 #define __critical
 extern volatile uint8_t P2 ;
 extern volatile uint8_t P3 ;
+extern volatile uint8_t P1_6 ;
 extern volatile uint8_t P3_1 ;
 extern volatile uint8_t P3_0 ;
 extern volatile uint8_t P1M0 ;
@@ -35,12 +36,35 @@ extern volatile uint8_t WDT_CONTR;
 // hardware configuration
 #include "hwconfig.h"
 
+#define TMO_10MS 1
+#define TMO_100MS 10
+#define TMO_SECOND 100
+static void set_timer(uint8_t *timer, uint8_t tmo)
+{
+    *timer = time_now + tmo;
+}
+
+/* Keep calling this function to make sure
+ * the timer stays elapsed */
+static uint8_t timer_elapsed(uint8_t *timer)
+{
+    uint8_t t = *timer;
+    t -= time_now;
+    if(t > 0x80)
+    {
+        *timer = time_now - 1;
+        return 1;
+    }
+    return 0;
+}
 
 
 volatile __bit S1_LONG;
 volatile __bit S1_PRESSED;
 volatile __bit S2_LONG;
 volatile __bit S2_PRESSED;
+volatile __bit S3_LONG;
+volatile __bit S3_PRESSED;
 
 volatile uint8_t debounce[NUM_SW];      // switch debounce buffer
 volatile uint8_t switchcount[NUM_SW];
@@ -99,6 +123,7 @@ static void read_buttons(void)
 
     MONITOR_S(1);
     MONITOR_S(2);
+    MONITOR_S(3);
 
     if (ev == EV_S1_LONG && S2_PRESSED) {
         S2_LONG = 1;
@@ -140,28 +165,6 @@ static void display_scan_out(void)
         tmp = ~((1<<LED_DIGITS_PORT_BASE) << digit);
         LED_DIGITS_PORT &= tmp;
     }
-}
-
-#define TMO_10MS 1
-#define TMO_100MS 10
-#define TMO_SECOND 100
-static void set_timer(uint8_t *timer, uint8_t tmo)
-{
-    *timer = time_now + tmo;
-}
-
-/* Keep calling this function to make sure
- * the timer stays elapsed */
-static uint8_t timer_elapsed(uint8_t *timer)
-{
-    uint8_t t = *timer;
-    t -= time_now;
-    if(t > 0x80)
-    {
-        *timer = time_now - 1;
-        return 1;
-    }
-    return 0;
 }
 
 /*
@@ -222,8 +225,6 @@ int8_t gettemp(uint16_t raw) {
 enum StateMachine {
     SM_START,
     SM_BTN_INIT,
-    SM_BTN_WAIT_FOR_RELEASE,
-    SM_BTN_SETUP_GAME_TIME,
     SM_MSG_MASTER,
     SM_IS_ASSIGN_MASTER,
     SM_MSG_SLAVE,
@@ -241,8 +242,20 @@ enum StateMachine {
 };
 
 static uint8_t btn_is_pressed(void) {
-    uint8_t adc = getADCResult8(ADC_LIGHT);
-    return adc > 150;
+    //uint8_t adc = getADCResult8(ADC_LIGHT);
+    //return adc > 150;
+    enum Event ev = event;
+    /* We handled it so clear! */
+    event = EV_NONE;
+    switch(ev)
+    {
+        case EV_S3_LONG:
+        case EV_S3_SHORT:
+            return 1;
+        default:
+            break;
+    }
+    return 0;
 }
 
 static uint8_t msg_available(void) {
@@ -377,70 +390,44 @@ static void statemachine(void)
     switch (state)
     {
         case SM_START:
-            state = SM_BTN_INIT;
+            if(!btn_is_pressed())
+                state = SM_BTN_INIT;
             break;
 
         case SM_BTN_INIT:
-            if(0)
-            {
-                print4char("PRES");
-            }
-            else {
-                /* Debug ADC */
-                display_val(getADCResult8(ADC_LIGHT));
-                display_char(0, 'P');
-            }
-            if (btn_is_pressed()) {
-                set_timer(&decrement_timer, 1 * TMO_SECOND);
-                state = SM_BTN_WAIT_FOR_RELEASE;
+            if(time_now & TICK_320MS) {
+                /* Also works for hours and minutes :D */
+                display_seconds_as_minutes(game_duration_in_min);
             } else {
-                state = SM_MSG_SLAVE;
+                clearTmpDisplay();
             }
-            break;
 
-        case SM_BTN_WAIT_FOR_RELEASE:
-            print4char("RELA");
-            if(!btn_is_pressed() && timer_elapsed(&decrement_timer))
-                state = SM_BTN_SETUP_GAME_TIME;
-            break;
-
-        case SM_BTN_SETUP_GAME_TIME:
-            {
-                if(time_now & TICK_320MS) {
-                    /* Also works for hours and minutes :D */
-                    display_seconds_as_minutes(game_duration_in_min);
-                } else {
-                    clearTmpDisplay();
-                }
-
-                if(btn_is_pressed())
-                {
+            switch(event){
+                case EV_S1_SHORT:
+                case EV_S1_LONG:
+                    if(game_duration_in_min < 90)
+                        game_duration_in_min += 5;
+                    break;
+                case EV_S2_SHORT:
+                case EV_S2_LONG:
+                    if(game_duration_in_min > 5)
+                        game_duration_in_min -= 5;
+                    break;
+                case EV_S3_SHORT:
+                case EV_S3_LONG:
                     /* We are master! kick off by sending assign */
                     id = 0;
                     seconds_left = game_duration_in_min * 60;
                     send_assign(id + 1, game_duration_in_min); //Next is player 1
                     set_timer(&beep_timer, 1 * TMO_10MS);
                     state = SM_MSG_MASTER;
-                } else {
-                    switch(event){
-                        case EV_S1_SHORT:
-                        case EV_S1_LONG:
-                            if(game_duration_in_min < 90)
-                                game_duration_in_min += 5;
-                            break;
-                        case EV_S2_SHORT:
-                        case EV_S2_LONG:
-                            if(game_duration_in_min > 5)
-                                game_duration_in_min -= 5;
-                            break;
-                        default:
-                            break;
-                    }
-                    /* We handled the event so clear it */
-                    if(event != EV_NONE)
-                        event = EV_NONE;
-                }
+                    break;
+                default:
+                    break;
             }
+            /* We handled the event so clear it */
+            if(event != EV_NONE)
+                event = EV_NONE;
             break;
 
         case SM_MSG_MASTER:
@@ -635,8 +622,8 @@ int main()
 {
     // SETUP
     // set photoresistor & ntc pins to open-drain output
-    P1M1 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
-    P1M0 |= (1<<ADC_LIGHT) | (1<<ADC_TEMP);
+    P1M1 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
+    P1M0 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
 
     timer0_init(); // display refresh & switch read
 

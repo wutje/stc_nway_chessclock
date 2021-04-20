@@ -119,7 +119,7 @@ void uart1_send_byte(uint8_t b)
 void uart1_send_packet(uint8_t opc, uint8_t data0, uint8_t data1)
 {
     /* Link TX to RX internally */
-    if(1) {
+    if(0) {
         rx_buf[0] = opc;
         rx_buf[1] = data0;
         rx_buf[2] = data1;

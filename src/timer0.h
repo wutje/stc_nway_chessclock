@@ -1,7 +1,7 @@
 #ifndef TIMER1_H
 #define TIMER1_H
 
-/* A overflowing couter couting in steps of 10ms
+/* A overflowing counter couting in steps of 10ms
  * Bit 0 = 10ms
  * Bit 1 = 20ms
  * Bit 2 = 40ms
@@ -11,6 +11,7 @@
  * Bit 6 = 640ms
  * Bit 7 = 1280ms */
 #define TICK_320MS  (1<<5)
+#define TICK_640MS  (1<<6)
 extern volatile uint8_t time_now;
 void timer0_init(void);
 #ifndef __GNUC__

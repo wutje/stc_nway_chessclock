@@ -67,7 +67,7 @@
  #define SW3     P1_4
  #define NUM_SW 3
 #else
- #define NUM_SW 2
+ #define NUM_SW 3
 #endif
 #define SW3     P1_6
 #define SW2     P3_0
