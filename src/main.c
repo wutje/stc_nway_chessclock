@@ -33,6 +33,9 @@ extern volatile uint8_t WDT_CONTR;
 // clear wdt
 #define WDT_CLEAR()    (WDT_CONTR |= 1 << 4)
 
+//Jump to panic state
+#define ASSERT(x) {if (!(x)) {state = SM_PANIC; break;} }
+
 // hardware configuration
 #include "hwconfig.h"
 
@@ -439,14 +442,11 @@ static void statemachine(void)
 
         case SM_IS_ASSIGN_MASTER:
             /* Only accept assign if duration matches */
-            if(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min) {
-                uint8_t ttl = 42; //Random...
-                nr_of_players = rx_buf[1]; //last id
-                send_passon(ttl, nr_of_players);
-                state = SM_MSG;
-            } else {
-                state = SM_PANIC;
-            }
+            ASSERT(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min);
+            uint8_t ttl = 42; //Random...
+            nr_of_players = rx_buf[1]; //last id
+            send_passon(ttl, nr_of_players);
+            state = SM_MSG;
             break;
 
         case SM_MSG_SLAVE:
@@ -458,18 +458,15 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN_SLAVE:
-            if(rx_buf[0] == OPC_ASSIGN) {
-                /* Yeah! we got an assign message:
-                 * save our id
-                 * and the game time */
-                id = rx_buf[1];
-                game_duration_in_min = rx_buf[2];
-                seconds_left = game_duration_in_min * 60;
-                send_assign(id + 1, game_duration_in_min);
-                state = SM_MSG;
-            } else {
-                state = SM_PANIC;
-            }
+            ASSERT(rx_buf[0] == OPC_ASSIGN);
+            /* Yeah! we got an assign message:
+             * save our id
+             * and the game time */
+            id = rx_buf[1];
+            game_duration_in_min = rx_buf[2];
+            seconds_left = game_duration_in_min * 60;
+            send_assign(id + 1, game_duration_in_min);
+            state = SM_MSG;
             break;
 
         case SM_PANIC:
@@ -480,8 +477,7 @@ static void statemachine(void)
         case SM_MSG:
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
-            }
-            else {
+            } else {
                 /* Display duration of current active player (not us) */
                 display_seconds_as_minutes(other_player_time);
                 if(timer_elapsed(&decrement_timer)) {
@@ -492,11 +488,8 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN:
-            if(rx_buf[0] == OPC_ASSIGN) {
-                state = SM_PANIC;
-            } else {
-                state = SM_IS_PASS;
-            }
+            ASSERT(rx_buf[0] != OPC_ASSIGN);
+            state = SM_IS_PASS;
             break;
 
         case SM_IS_PASS:
@@ -508,11 +501,8 @@ static void statemachine(void)
             break;
 
         case SM_IS_CLAIM:
-            if(rx_buf[0] == OPC_CLAIM) {
-                state = SM_CLAIM_CHECK;
-            } else {
-                state = SM_PANIC;
-            }
+            ASSERT(rx_buf[0] == OPC_CLAIM);
+            state = SM_CLAIM_CHECK;
             break;
 
         case SM_CLAIM_CHECK:
@@ -568,15 +558,12 @@ static void statemachine(void)
             break;
 
         case SM_IS_CLAIM2:
-            if(rx_buf[0] == OPC_CLAIM) {
-                set_timer(&decrement_timer, 1 * TMO_SECOND);
-                /* Always have atleast 60 seconds of play */
-                if(seconds_left < 60)
-                    seconds_left = 60;
-                state = SM_BTN;
-            } else {
-                state = SM_PANIC;
-            }
+            ASSERT((rx_buf[0] == OPC_CLAIM));
+            set_timer(&decrement_timer, 1 * TMO_SECOND);
+            /* Always have atleast 60 seconds of play */
+            if(seconds_left < 60)
+                seconds_left = 60;
+            state = SM_BTN;
             break;
 
         case SM_BTN:
