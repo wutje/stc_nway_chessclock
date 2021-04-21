@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #ifdef __GNUC__
 #define __bit uint8_t
 #define __interrupt
@@ -271,19 +272,19 @@ static uint8_t msg_available(void) {
     return rx;
 }
 
-static void send_assign(uint8_t your_id, uint8_t time)
+static void send_assign(uint8_t your_id, uint16_t cfg_time)
 {
-    uart1_send_packet(OPC_ASSIGN, your_id, time);
+    uart1_send_packet(OPC_ASSIGN, your_id, 'x', 'x', cfg_time);
 }
 
-static void send_passon(uint8_t ttl, uint8_t nr_of_players)
+static void send_passon(uint8_t ttl, uint8_t next_id, uint8_t nr_of_players, uint16_t rem_time)
 {
-    uart1_send_packet(OPC_PASSON, ttl, nr_of_players);
+    uart1_send_packet(OPC_PASSON, next_id, nr_of_players, ttl, rem_time);
 }
 
-static void send_claim(uint8_t id)
+static void send_claim(uint8_t id, uint8_t nr_of_players, uint16_t rem_time)
 {
-    uart1_send_packet(OPC_CLAIM, id, 'x');
+    uart1_send_packet(OPC_CLAIM, id, nr_of_players, 'x', rem_time);
 }
 
 /* Displaying chars is non-trivial, so I added this convenience macro */
@@ -291,7 +292,7 @@ static void send_claim(uint8_t id)
 
 static void print4char(const char* str)
 {
-    for(uint8_t i= 0; i < 4; i++)
+    for(uint8_t i = 0; i < 4; i++)
     {
         uint8_t digit = *str++;
         if(digit < 'A') {
@@ -338,6 +339,7 @@ static void display_val(uint8_t val)
 
     clearTmpDisplay();
 
+    /* Do not display any leading zero */
     if(hun)
         filldisplay(1, hun);
     if(hun || ten)
@@ -370,13 +372,15 @@ static void handle_beep(void)
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
-    static uint8_t id = 0; //Default to 'master'
+    static uint8_t id = 0; //Default to 'master' ?
     static uint8_t nr_of_players = 0;
     static uint16_t seconds_left;
     static uint8_t game_duration_in_min = 30; //Default to 30 minutes
     static uint8_t decrement_timer;
     static uint8_t other_player_time = 0;
+    static uint8_t active_player_id;
     static uint8_t statemachine_delay = 0;
+    static uint8_t remaining_time[4]; //4 clocks for now
 
     /* If state machine should wait, do so */
     if(!timer_elapsed(&statemachine_delay)) {
@@ -393,6 +397,7 @@ static void statemachine(void)
     switch (state)
     {
         case SM_START:
+            memset(remaining_time, 0, sizeof(remaining_time));
             if(!btn_is_pressed())
                 state = SM_BTN_INIT;
             break;
@@ -404,6 +409,10 @@ static void statemachine(void)
             } else {
                 clearTmpDisplay();
             }
+
+            /* Go check for received data
+             * unless button 3 is pressed */
+            state = SM_MSG_SLAVE;
 
             switch(event){
                 case EV_S1_SHORT:
@@ -421,7 +430,7 @@ static void statemachine(void)
                     /* We are master! kick off by sending assign */
                     id = 0;
                     seconds_left = game_duration_in_min * 60;
-                    send_assign(id + 1, game_duration_in_min); //Next is player 1
+                    send_assign(id + 1, seconds_left); //Next is player 1
                     set_timer(&beep_timer, 1 * TMO_10MS);
                     state = SM_MSG_MASTER;
                     break;
@@ -431,10 +440,11 @@ static void statemachine(void)
             /* We handled the event so clear it */
             if(event != EV_NONE)
                 event = EV_NONE;
+
             break;
 
         case SM_MSG_MASTER:
-            print4char("ACCU");
+            print4char("DEAD");
             if (msg_available()) {
                 state = SM_IS_ASSIGN_MASTER;
             }
@@ -442,11 +452,12 @@ static void statemachine(void)
 
         case SM_IS_ASSIGN_MASTER:
             /* Only accept assign if duration matches */
-            ASSERT(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min);
+            ASSERT(rx_buf[0] == OPC_ASSIGN );
             {
-                uint8_t ttl = 42; //Random...
+                uint8_t l = 42; //Random...
+                uint8_t next_id = (id + 1) % nr_of_players;
                 nr_of_players = rx_buf[1]; //last id
-                send_passon(ttl, nr_of_players);
+                send_passon(l, next_id, nr_of_players, seconds_left);
                 state = SM_MSG;
             }
             break;
@@ -460,14 +471,14 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN_SLAVE:
+            /* TODO we could receive any message! */
             ASSERT(rx_buf[0] == OPC_ASSIGN);
             /* Yeah! we got an assign message:
              * save our id
              * and the game time */
             id = rx_buf[1];
-            game_duration_in_min = rx_buf[2];
-            seconds_left = game_duration_in_min * 60;
-            send_assign(id + 1, game_duration_in_min);
+            seconds_left = (uint16_t)rx_buf[3] << 8 | rx_buf[4];
+            send_assign(id + 1, seconds_left);
             state = SM_MSG;
             break;
 
@@ -480,10 +491,17 @@ static void statemachine(void)
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
             } else {
-                /* Display duration of current active player (not us) */
-                display_seconds_as_minutes(other_player_time);
+                if(0 && (time_now & TICK_1280MS)) {
+                    /* Display remaining time of current active player (not us) */
+                    display_seconds_as_minutes(remaining_time[active_player_id]);
+                } else {
+                    /* Display remaining time of current active player (not us) */
+                    display_seconds_as_minutes(other_player_time);
+                }
+
                 if(timer_elapsed(&decrement_timer)) {
                     other_player_time++;
+                    remaining_time[active_player_id]--;
                     set_timer(&decrement_timer, 1 * TMO_SECOND);
                 }
             }
@@ -509,11 +527,20 @@ static void statemachine(void)
 
         case SM_CLAIM_CHECK:
             {
+                //CLAIM message
                 uint8_t other_id = rx_buf[1];
+                nr_of_players    = rx_buf[2];
+                //                 rx_buf[3]; //Unused for now
+                uint16_t secs    = rx_buf[4];
+                secs = secs << 8 | rx_buf[5];
                 if(other_id == id) {
                     state = SM_MSG;
                 } else {
-                    send_claim(other_id);
+                    /* Send message onto the assigned one. But keep track
+                     * of its time */
+                    remaining_time[other_id] = secs;
+                    active_player_id = other_id;
+                    send_claim(other_id, nr_of_players, secs);
                     state = SM_MSG;
                 }
                 //Counter reset voor display
@@ -524,13 +551,18 @@ static void statemachine(void)
 
         case SM_TTL_CHECK:
             {
-                uint8_t ttl = rx_buf[1];
-                nr_of_players = rx_buf[2];
+                //PASSON message
+                uint8_t r_id     = rx_buf[1]; //This my id, if ttl is 0
+                nr_of_players    = rx_buf[2];
+                uint8_t ttl      = rx_buf[3];
+                uint16_t secs    = rx_buf[4];
+                secs = secs << 8 | rx_buf[5];
                 if(ttl == 0) {
-                    send_claim(id);
+                    send_claim(r_id, nr_of_players, secs);
                     set_timer(&beep_timer, 3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
+                    uint8_t next_id = (id + 1) % nr_of_players;
                     /* TTL != 0 means we are in discovery mode! */
                     uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
                     set_timer(&beep_timer, tmo);
@@ -539,7 +571,7 @@ static void statemachine(void)
                     set_timer(&statemachine_delay, tmo + 2 * TMO_10MS);
 
                     /* Show the number of players detected during countdown:
-                     * for player 1 of 2 it show "P1-2" */
+                     * for player 1 of 2 it show "P0-2" */
                     display_char(0, 'P');
                     filldisplay(1, id);
                     filldisplay(2, LED_DASH);
@@ -547,7 +579,7 @@ static void statemachine(void)
 
                     /* Send message straight away,
                      * we will wait before processing another */
-                    send_passon(rx_buf[1] - 1, nr_of_players);
+                    send_passon(ttl - 1, next_id, nr_of_players, seconds_left);
                     state = SM_MSG;
                 }
             }
@@ -561,6 +593,7 @@ static void statemachine(void)
 
         case SM_IS_CLAIM2:
             ASSERT((rx_buf[0] == OPC_CLAIM));
+            /* TODO save data in claim in case we are not yet booted */
             set_timer(&decrement_timer, 1 * TMO_SECOND);
             /* Always have atleast 60 seconds of play */
             if(seconds_left < 60)
@@ -572,8 +605,9 @@ static void statemachine(void)
             /* Display duration of current active player (not us) */
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
+                uint8_t next_id = (id + 1) % nr_of_players;
                 set_timer(&beep_timer, 1 * TMO_10MS);
-                send_passon(0, nr_of_players); // 0 = next
+                send_passon(0, next_id, nr_of_players, remaining_time[next_id]); // 0 = next
                 state = SM_MSG;
             }
             else {

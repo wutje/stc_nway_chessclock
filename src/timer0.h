@@ -12,6 +12,7 @@
  * Bit 7 = 1280ms */
 #define TICK_320MS  (1<<5)
 #define TICK_640MS  (1<<6)
+#define TICK_1280MS  (1<<7)
 extern volatile uint8_t time_now;
 void timer0_init(void);
 #ifndef __GNUC__
