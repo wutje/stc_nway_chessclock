@@ -443,10 +443,12 @@ static void statemachine(void)
         case SM_IS_ASSIGN_MASTER:
             /* Only accept assign if duration matches */
             ASSERT(rx_buf[0] == OPC_ASSIGN && rx_buf[2] == game_duration_in_min);
-            uint8_t ttl = 42; //Random...
-            nr_of_players = rx_buf[1]; //last id
-            send_passon(ttl, nr_of_players);
-            state = SM_MSG;
+            {
+                uint8_t ttl = 42; //Random...
+                nr_of_players = rx_buf[1]; //last id
+                send_passon(ttl, nr_of_players);
+                state = SM_MSG;
+            }
             break;
 
         case SM_MSG_SLAVE:
