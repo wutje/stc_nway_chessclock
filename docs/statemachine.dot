@@ -34,6 +34,7 @@ digraph G {
         SM_IS_CLAIM2 [label = "SM_IS_CLAIM2 (14)\nClaim msg?"];
         SM_BTN [label = "SM_BTN (15)\nButton pressed?"];
         SM_TTL_CHECK_TIMEOUT [label = "SM_TTL_CHECK_TIMEOUT (16)\nSecond passed?"];
+        SM_BTN_RECOVER [label = "SM_BTN_RECOVER (17)\nButton pressed?"];
 
         SM_PANIC3 [label = "SM_PANIC (6)", style = filled, color = red];
         SM_PANIC4 [label = "SM_PANIC (6)", style = filled, color = red];
@@ -67,7 +68,9 @@ digraph G {
 
     // REGULAR GAME
     SM_MSG -> SM_IS_ASSIGN [label = "Y"];
-    SM_MSG -> SM_MSG [label = "N, MSG_TIME++"];
+    SM_MSG -> SM_BTN_RECOVER [label = "N, MSG_TIME++"];
+    SM_BTN_RECOVER -> SM_MSG [label = "Y, send passon(ttl=0)"];
+    SM_BTN_RECOVER -> SM_MSG [label = "N"];
     SM_IS_ASSIGN -> SM_PANIC3 [label = "Y"];
     SM_IS_ASSIGN -> SM_IS_PASS [label = "N"];
     SM_IS_PASS -> SM_TTL_CHECK [label = "Y"];
