@@ -35,6 +35,7 @@ digraph G {
         SM_BTN [label = "SM_BTN (15)\nButton pressed?"];
         SM_TTL_CHECK_TIMEOUT [label = "SM_TTL_CHECK_TIMEOUT (16)\nSecond passed?"];
         SM_BTN_RECOVER [label = "SM_BTN_RECOVER (17)\nButton pressed?"];
+        SM_BTN_RECOVER2 [label = "SM_BTN_RECOVER2 (18)\nButton pressed?"];
 
         SM_PANIC3 [label = "SM_PANIC (6)", style = filled, color = red];
         SM_PANIC4 [label = "SM_PANIC (6)", style = filled, color = red];
@@ -84,7 +85,11 @@ digraph G {
     SM_TTL_CHECK_TIMEOUT -> SM_MSG [label = "Y,\npasson(msg.ttl-1, NPLAYERS)"];
     SM_TTL_CHECK_TIMEOUT -> SM_TTL_CHECK_TIMEOUT [label = "N"];
     SM_MSG_CLAIM -> SM_IS_CLAIM2 [label = "Y"];
-    SM_MSG_CLAIM -> SM_MSG_CLAIM [label = "N"];
+    SM_MSG_CLAIM -> SM_BTN_RECOVER2 [label = "N"];
+
+    SM_BTN_RECOVER2 -> SM_MSG_CLAIM [label = "Y, send Claim(ID)"];
+    SM_BTN_RECOVER2 -> SM_MSG_CLAIM [label = "N"];
+
     SM_IS_CLAIM2 -> SM_BTN [label = "Y, time[msg.n]←msg.timeleft"];
     SM_IS_CLAIM2 -> SM_PANIC5 [label = "N"];
     SM_BTN -> SM_MSG [label = "Y,\npasson(ttl=0, NPLAYERS)"];
