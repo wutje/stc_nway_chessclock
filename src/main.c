@@ -260,31 +260,14 @@ static uint8_t recovery_btn_is_pressed(void) {
     enum Event ev = event;
     /* We handled it so clear! */
     event = EV_NONE;
-    switch(ev)
-    {
-        case EV_S3_LONG:
-            return 1;
-        default:
-            break;
-    }
-    return 0;
+    return ev == EV_S3_LONG;
 }
 
 static uint8_t btn_is_pressed(void) {
-    //uint8_t adc = getADCResult8(ADC_LIGHT);
-    //return adc > 150;
     enum Event ev = event;
     /* We handled it so clear! */
     event = EV_NONE;
-    switch(ev)
-    {
-        case EV_S3_LONG:
-        case EV_S3_SHORT:
-            return 1;
-        default:
-            break;
-    }
-    return 0;
+    return ev == EV_S3_SHORT;
 }
 
 static uint8_t msg_available(void) {
