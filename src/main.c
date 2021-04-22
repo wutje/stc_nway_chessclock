@@ -72,7 +72,7 @@ volatile __bit S3_PRESSED;
 
 volatile uint8_t debounce[NUM_SW];      // switch debounce buffer
 volatile uint8_t switchcount[NUM_SW];
-#define SW_CNTMAX 80	//long push
+#define SW_CNTMAX (80*1)	//long push
 
 enum Event {
     EV_NONE,
@@ -94,6 +94,12 @@ static volatile enum Event event;
 
 static void read_buttons(void)
 {
+    static uint8_t t = 0;
+    /* Run only every 10ms */
+    if(t != (time_now&1))
+        return;
+    t ^= 1;
+
     enum Event ev = EV_NONE;
     // Check SW status and chattering control
 #define MONITOR_S(n) \
