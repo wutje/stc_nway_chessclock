@@ -251,7 +251,7 @@ enum StateMachine {
     SM_BTN,                 //15
     SM_IS_CLAIM_SLAVE,      //16
     SM_IS_PASS_SLAVE,       //17
-    SM_IS_PASS_CHECK_SLAVE, //18
+    SM_PASS_CHECK_SLAVE,    //18
     SM_BTN_RECOVER,         //19
     SM_BTN_RECOVER2,        //20
 };
