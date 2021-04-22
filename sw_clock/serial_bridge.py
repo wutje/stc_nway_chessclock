@@ -11,7 +11,8 @@ FN_IN = sys.argv[2]
 FN_OUT = sys.argv[3]
 
 SYNC_BYTE = b's' ## from uart.c
-MSG_LEN = 5 ## inferred from uart.c
+MSG_LEN = 9 ## inferred from uart.c
+OPC = {ord(b'A'):"ASSIGN", ord(b'P'):"PASSON", ord(b'C'):"CLAIM"}
 
 print(f"Opening {FN_IN} for reading")
 PIPEIN = aiofiles.open(FN_IN, 'rb')
@@ -19,6 +20,29 @@ print(f"Opening {FN_OUT} for writing")
 PIPEOUT = open(FN_OUT, 'wb')
 
 snooper = None;
+
+def checksum(msg):
+    cs = sum(SYNC_BYTE + msg[2:8])
+    if cs != msg[8]:
+        return "CS ERROR"
+    return ""
+
+
+def decode_msg(name, msg):
+    #print raw
+    hx = msg.hex(' ')
+
+    debug = msg[1]
+    opc = OPC.get(msg[2], "!! ERROR UNKNOWN OPCODE !!")
+    print("opc:", opc, msg[2])
+    next_id = msg[3]
+    nr_of_players = msg[4]
+    ttl = msg[5]
+    rem_time = (msg[6]<<8)|msg[7]
+    cs = checksum(msg)
+    cooked = f"[dbg={debug} {opc} nextid={next_id} nplayers={nr_of_players} ttl={ttl} rtime={rem_time} {cs}]"
+
+    sys.stderr.write(f"{name}: {msg} ({hx}) {cooked}\n")
 
 class Accumulator:
     def __init__(self, msglen, name):
@@ -32,8 +56,7 @@ class Accumulator:
             self.i += 1
         if self.i == self.msglen:
             msg = b''.join(self.bytes)
-            hx = msg.hex(' ')
-            sys.stderr.write(f"{self.name}: {msg} ({hx})\n")
+            decode_msg(self.name, msg)
             self.i = 0
 
 async def read_pipe():
