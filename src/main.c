@@ -463,8 +463,8 @@ static void statemachine(void)
             ASSERT(rx_buf[0] == OPC_ASSIGN );
             {
                 uint8_t l = 42; //Random...
-                uint8_t next_id = (id + 1) % nr_of_players;
                 nr_of_players = rx_buf[1]; //last id
+                uint8_t next_id = (id + 1) % nr_of_players;
                 send_passon(l, next_id, nr_of_players, seconds_left);
                 state = SM_MSG;
             }
