@@ -374,18 +374,19 @@ static void handle_beep(void)
     } else {
         if(0) {
             BUZZER_ON;
+        }
     }
 }
 
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
-    static uint8_t id = 0; //Default to 'master' ?
-    static uint8_t nr_of_players = 0;
+    static uint8_t id;
+    static uint8_t nr_of_players;
     static uint16_t seconds_left;
-    static uint8_t game_duration_in_min = 30; //Default to 30 minutes
+    static uint8_t game_duration_in_min;
     static uint8_t decrement_timer;
-    static uint8_t other_player_time = 0;
+    static uint8_t other_player_time;
     static uint8_t active_player_id;
     static uint8_t statemachine_delay = 0;
     static uint8_t remaining_time[4]; //4 clocks for now
@@ -405,6 +406,10 @@ static void statemachine(void)
     switch (state)
     {
         case SM_START:
+            id = 0;
+            other_player_time = 0;
+            game_duration_in_min = 30;
+            nr_of_players = 0;
             memset(remaining_time, 0, sizeof(remaining_time));
             if(!btn_is_pressed())
                 state = SM_BTN_INIT;
