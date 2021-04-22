@@ -372,7 +372,7 @@ static void handle_beep(void)
     if (timer_elapsed(&beep_timer)) {
         BUZZER_OFF;
     } else {
-        if(0)
+        if(0) {
             BUZZER_ON;
     }
 }
