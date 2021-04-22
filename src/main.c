@@ -526,7 +526,7 @@ static void statemachine(void)
                      * PASSON */
                     id               = rx_buf[1]; //This my id, if ttl is 0
                     nr_of_players    = rx_buf[2];
-                    uint8_t ttl      = rx_buf[3];
+                    //uint8_t ttl      = rx_buf[3];
                     uint16_t secs    = rx_buf[4];
                     secs = secs << 8 | rx_buf[5]; //This is MY remaining time
                     seconds_left = secs;
