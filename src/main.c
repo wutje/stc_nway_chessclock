@@ -256,6 +256,20 @@ enum StateMachine {
     SM_BTN_RECOVER2,        //20
 };
 
+static uint8_t recovery_btn_is_pressed(void) {
+    enum Event ev = event;
+    /* We handled it so clear! */
+    event = EV_NONE;
+    switch(ev)
+    {
+        case EV_S3_LONG:
+            return 1;
+        default:
+            break;
+    }
+    return 0;
+}
+
 static uint8_t btn_is_pressed(void) {
     //uint8_t adc = getADCResult8(ADC_LIGHT);
     //return adc > 150;
@@ -482,15 +496,57 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN_SLAVE:
-            /* TODO we could receive any message! */
-            ASSERT(rx_buf[0] == OPC_ASSIGN);
-            /* Yeah! we got an assign message:
-             * save our id
-             * and the game time */
-            id = rx_buf[1];
-            seconds_left = (uint16_t)rx_buf[3] << 8 | rx_buf[4];
-            send_assign(id + 1, seconds_left);
-            state = SM_MSG;
+            if(rx_buf[0] == OPC_ASSIGN) {
+                /* Yeah! we got an assign message:
+                 * save our id
+                 * and the game time */
+                id = rx_buf[1];
+                seconds_left = (uint16_t)rx_buf[3] << 8 | rx_buf[4];
+                send_assign(id + 1, seconds_left);
+                state = SM_MSG;
+            } else {
+                state = SM_IS_CLAIM_SLAVE;
+            }
+            break;
+
+        case SM_IS_CLAIM_SLAVE:
+            if(rx_buf[0] == OPC_CLAIM) {
+                /* Forward message as is */
+                //CLAIM message
+                uint8_t other_id = rx_buf[1];
+                nr_of_players    = rx_buf[2];
+                //                 rx_buf[3]; //Unused for now
+                uint16_t secs    = rx_buf[4];
+                secs = secs << 8 | rx_buf[5];
+                send_claim(other_id, nr_of_players, secs);
+                state = SM_MSG_SLAVE;
+            } else {
+                state = SM_IS_PASS_SLAVE;
+            }
+            break;
+
+        case SM_IS_PASS_SLAVE:
+            /* If anything other then PASSON give up, we tried all. */
+            ASSERT(rx_buf[0] == OPC_PASSON );
+            state = SM_PASS_CHECK_SLAVE;
+            break;
+
+        case SM_PASS_CHECK_SLAVE:
+            {
+                if(rx_buf[3] == 0) { //ttl
+                    /* Save data from this message!
+                     * PASSON */
+                    id               = rx_buf[1]; //This my id, if ttl is 0
+                    nr_of_players    = rx_buf[2];
+                    uint8_t ttl      = rx_buf[3];
+                    uint16_t secs    = rx_buf[4];
+                    secs = secs << 8 | rx_buf[5]; //This is MY remaining time
+                    seconds_left = secs;
+                    state = SM_MSG_CLAIM;
+                }
+                else
+                    state = SM_MSG_SLAVE;
+            }
             break;
 
         case SM_PANIC:
@@ -599,7 +655,16 @@ static void statemachine(void)
         case SM_MSG_CLAIM:
             if (msg_available()) {
                 state = SM_IS_CLAIM2;
+            } else {
+                state = SM_BTN_RECOVER2;
             }
+            break;
+
+        case SM_BTN_RECOVER2:
+            if(recovery_btn_is_pressed())
+                send_claim(id, nr_of_players, seconds_left);
+
+            state = SM_MSG_CLAIM;
             break;
 
         case SM_IS_CLAIM2:
@@ -617,9 +682,9 @@ static void statemachine(void)
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
                 uint8_t next_id = (id + 1) % nr_of_players;
-                set_timer(&beep_timer, 1 * TMO_10MS);
                 send_passon(0, next_id, nr_of_players, remaining_time[next_id]); // 0 = next
-                state = SM_MSG;
+                set_timer(&beep_timer, 1 * TMO_10MS);
+                state = SM_BTN_RECOVER;
             }
             else {
                 if(timer_elapsed(&decrement_timer)) {
@@ -631,6 +696,15 @@ static void statemachine(void)
                         set_timer(&beep_timer, 1 * TMO_10MS);
                 }
             }
+            break;
+
+        case SM_BTN_RECOVER:
+            if(recovery_btn_is_pressed())
+            {
+                uint8_t next_id = (id + 1) % nr_of_players;
+                send_passon(0, next_id, nr_of_players, remaining_time[next_id]); // 0 = next
+            }
+            state = SM_MSG;
             break;
     }
 
