@@ -242,7 +242,12 @@ enum StateMachine {
     SM_TTL_CHECK,
     SM_MSG_CLAIM,
     SM_IS_CLAIM2,
-    SM_BTN,
+    SM_BTN,                 //15
+    SM_IS_CLAIM_SLAVE,      //16
+    SM_IS_PASS_SLAVE,       //17
+    SM_IS_PASS_CHECK_SLAVE, //18
+    SM_BTN_RECOVER,         //19
+    SM_BTN_RECOVER2,        //20
 };
 
 static uint8_t btn_is_pressed(void) {
