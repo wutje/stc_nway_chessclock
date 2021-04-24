@@ -278,17 +278,26 @@ static uint8_t msg_available(void) {
     return rx;
 }
 
+#define MAX_NR_OF_PLAYERS 4 //only 4 clocks for now
+
+static uint8_t id; //my assigned ID
+static uint8_t nr_of_players; //Detected number of players
+static uint16_t remaining_time[MAX_NR_OF_PLAYERS];
+
 static void send_assign(uint8_t your_id, uint16_t cfg_time)
 {
     uart1_send_packet(OPC_ASSIGN, your_id, 'x', 'x', cfg_time);
 }
 
-static void send_passon(uint8_t ttl, uint8_t next_id, uint8_t nr_of_players, uint16_t rem_time)
+static void send_passon(uint8_t ttl)
 {
+    uint8_t next_id = (id + 1) % nr_of_players;
+    uint16_t rem_time = remaining_time[next_id];
+
     uart1_send_packet(OPC_PASSON, next_id, nr_of_players, ttl, rem_time);
 }
 
-static void send_claim(uint8_t id, uint8_t nr_of_players, uint16_t rem_time)
+static void send_claim(uint8_t id, uint16_t rem_time)
 {
     uart1_send_packet(OPC_CLAIM, id, nr_of_players, 'x', rem_time);
 }
@@ -379,21 +388,20 @@ static void handle_beep(void)
 static void statemachine(void)
 {
     static enum StateMachine state = SM_START;
-    static uint8_t id;
-    static uint8_t nr_of_players;
+    static uint8_t statemachine_delay = 0;
     static uint16_t seconds_left;
     static uint8_t game_duration_in_min;
     static uint8_t decrement_timer;
     static uint16_t other_player_time;
     static uint8_t active_player_id;
-    static uint8_t statemachine_delay = 0;
-    static uint8_t remaining_time[4]; //4 clocks for now
 
     /* If state machine should wait, do so */
     if(!timer_elapsed(&statemachine_delay)) {
         return;
     }
 
+    /* Clear display AFTER check timer:
+     * whoever sets the timer also has a one time option to set the screen. */
     clearTmpDisplay();
 
     /* Save last state before panic so in panic we can show it */
@@ -467,8 +475,7 @@ static void statemachine(void)
             {
                 uint8_t l = 42; //Random...
                 nr_of_players = rx_buf[1]; //last id
-                uint8_t next_id = (id + 1) % nr_of_players;
-                send_passon(l, next_id, nr_of_players, seconds_left);
+                send_passon(l);
                 state = SM_MSG;
             }
             break;
@@ -504,7 +511,7 @@ static void statemachine(void)
                 //                 rx_buf[3]; //Unused for now
                 uint16_t secs    = rx_buf[4];
                 secs = secs << 8 | rx_buf[5];
-                send_claim(other_id, nr_of_players, secs);
+                send_claim(other_id, secs);
                 state = SM_MSG_SLAVE;
             } else {
                 state = SM_IS_PASS_SLAVE;
@@ -525,9 +532,7 @@ static void statemachine(void)
                     id               = rx_buf[1]; //This my id, if ttl is 0
                     nr_of_players    = rx_buf[2];
                     //uint8_t ttl      = rx_buf[3];
-                    uint16_t secs    = rx_buf[4];
-                    secs = secs << 8 | rx_buf[5]; //This is MY remaining time
-                    seconds_left = secs;
+                    seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
                     state = SM_MSG_CLAIM;
                 }
                 else
@@ -593,7 +598,7 @@ static void statemachine(void)
                      * of its time */
                     remaining_time[other_id] = secs;
                     active_player_id = other_id;
-                    send_claim(other_id, nr_of_players, secs);
+                    send_claim(other_id, secs);
                     state = SM_MSG;
                 }
                 //Counter reset voor display
@@ -611,11 +616,10 @@ static void statemachine(void)
                 uint16_t secs    = rx_buf[4];
                 secs = secs << 8 | rx_buf[5];
                 if(ttl == 0) {
-                    send_claim(r_id, nr_of_players, secs);
+                    send_claim(r_id, secs);
                     set_timer(&beep_timer, 3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
-                    uint8_t next_id = (id + 1) % nr_of_players;
                     /* TTL != 0 means we are in discovery mode! */
                     uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
                     set_timer(&beep_timer, tmo);
@@ -632,7 +636,7 @@ static void statemachine(void)
 
                     /* Send message straight away,
                      * we will wait before processing another */
-                    send_passon(ttl - 1, next_id, nr_of_players, seconds_left);
+                    send_passon(ttl - 1);
                     state = SM_MSG;
                 }
             }
@@ -648,7 +652,7 @@ static void statemachine(void)
 
         case SM_BTN_RECOVER2:
             if(recovery_btn_is_pressed())
-                send_claim(id, nr_of_players, seconds_left);
+                send_claim(id, seconds_left);
 
             state = SM_MSG_CLAIM;
             break;
@@ -667,8 +671,7 @@ static void statemachine(void)
             /* Display duration of current active player (not us) */
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
-                uint8_t next_id = (id + 1) % nr_of_players;
-                send_passon(0, next_id, nr_of_players, remaining_time[next_id]); // 0 = next
+                send_passon(0); // ttl 0 = next
                 set_timer(&beep_timer, 1 * TMO_10MS);
                 state = SM_BTN_RECOVER;
             }
@@ -687,8 +690,7 @@ static void statemachine(void)
         case SM_BTN_RECOVER:
             if(recovery_btn_is_pressed())
             {
-                uint8_t next_id = (id + 1) % nr_of_players;
-                send_passon(0, next_id, nr_of_players, remaining_time[next_id]); // 0 = next
+                send_passon(0); // ttl 0 = next
             }
             state = SM_MSG;
             break;
