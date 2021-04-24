@@ -442,7 +442,7 @@ static void statemachine(void)
                     if(game_duration_in_min > 5)
                         game_duration_in_min -= 5;
                     break;
-                case EV_S3_LONG:
+                case EV_S3_SHORT:
                     /* We are master! kick off by sending assign */
                     id = 0;
                     seconds_left = game_duration_in_min * 60;
@@ -552,19 +552,15 @@ static void statemachine(void)
             if (msg_available()) {
                 state = SM_IS_ASSIGN;
             } else {
-                if(0 && (time_now & TICK_1280MS)) {
-                    /* Display remaining time of current active player (not us) */
-                    display_seconds_as_minutes(remaining_time[active_player_id]);
-                } else {
-                    /* Display remaining time of current active player (not us) */
-                    display_seconds_as_minutes(other_player_time);
-                }
+                /* Display remaining time of current active player (not us) */
+                display_seconds_as_minutes(other_player_time);
 
                 if(timer_elapsed(&decrement_timer)) {
                     other_player_time++;
                     remaining_time[active_player_id]--;
                     set_timer(&decrement_timer, 1 * TMO_SECOND);
                 }
+                state = SM_BTN_RECOVER;
             }
             break;
 
@@ -676,7 +672,7 @@ static void statemachine(void)
             if (btn_is_pressed()) {
                 send_passon(0); // ttl 0 = next
                 set_timer(&beep_timer, 1 * TMO_10MS);
-                state = SM_BTN_RECOVER;
+                state = SM_MSG;
             }
             else {
                 if(timer_elapsed(&decrement_timer)) {
@@ -691,6 +687,8 @@ static void statemachine(void)
             break;
 
         case SM_BTN_RECOVER:
+            /* Dirty hack: print the same as SM_MSG would do */
+            display_seconds_as_minutes(other_player_time);
             if(recovery_btn_is_pressed())
             {
                 send_passon(0); // ttl 0 = next
