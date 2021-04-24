@@ -16,8 +16,6 @@ extern volatile uint8_t P3 ;
 extern volatile uint8_t P1_6 ;
 extern volatile uint8_t P3_1 ;
 extern volatile uint8_t P3_0 ;
-extern volatile uint8_t P1M0 ;
-extern volatile uint8_t P1M1 ;
 extern volatile uint8_t EA;
 extern volatile uint8_t WDT_CONTR;
 #else
@@ -717,10 +715,6 @@ static void statemachine(void)
 int main()
 {
     // SETUP
-    // set photoresistor & ntc pins to open-drain output
-    P1M1 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
-    P1M0 |= (0<<ADC_LIGHT) | (1<<ADC_TEMP);
-
     timer0_init(); // display refresh & switch read
 
     uart1_init();   // setup uart
