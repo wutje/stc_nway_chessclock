@@ -489,7 +489,7 @@ static void statemachine(void)
                  * save our id
                  * and the game time */
                 id = rx_buf[1];
-                seconds_left = (uint16_t)rx_buf[3] << 8 | rx_buf[4];
+                seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
                 send_assign(id + 1, seconds_left);
                 state = SM_MSG;
             } else {
