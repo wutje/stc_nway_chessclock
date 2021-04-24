@@ -412,11 +412,11 @@ static void statemachine(void)
     switch (state)
     {
         case SM_START:
+            /* Init 'global' variables */
             id = 0;
             other_player_time = 0;
             game_duration_in_min = 30;
             nr_of_players = 0;
-            memset(remaining_time, 0, sizeof(remaining_time));
             if(!btn_is_pressed())
                 state = SM_BTN_INIT;
             break;
@@ -449,6 +449,9 @@ static void statemachine(void)
                     /* We are master! kick off by sending assign */
                     id = 0;
                     seconds_left = game_duration_in_min * 60;
+                    for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                        remaining_time[i] = seconds_left;
+                    }
                     send_assign(id + 1, seconds_left); //Next is player 1
                     set_timer(&beep_timer, 1 * TMO_10MS);
                     state = SM_MSG_MASTER;
@@ -495,6 +498,9 @@ static void statemachine(void)
                  * and the game time */
                 id = rx_buf[1];
                 seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
+                for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                    remaining_time[i] = seconds_left;
+                }
                 send_assign(id + 1, seconds_left);
                 state = SM_MSG;
             } else {
