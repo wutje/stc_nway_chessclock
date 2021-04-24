@@ -435,16 +435,13 @@ static void statemachine(void)
 
             switch(event){
                 case EV_S1_SHORT:
-                case EV_S1_LONG:
                     if(game_duration_in_min < 90)
                         game_duration_in_min += 5;
                     break;
                 case EV_S2_SHORT:
-                case EV_S2_LONG:
                     if(game_duration_in_min > 5)
                         game_duration_in_min -= 5;
                     break;
-                case EV_S3_SHORT:
                 case EV_S3_LONG:
                     /* We are master! kick off by sending assign */
                     id = 0;
