@@ -386,7 +386,7 @@ static void statemachine(void)
     static uint16_t seconds_left;
     static uint8_t game_duration_in_min;
     static uint8_t decrement_timer;
-    static uint8_t other_player_time;
+    static uint16_t other_player_time;
     static uint8_t active_player_id;
     static uint8_t statemachine_delay = 0;
     static uint8_t remaining_time[4]; //4 clocks for now
