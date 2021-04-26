@@ -1,5 +1,5 @@
-#ifndef TIMER1_H
-#define TIMER1_H
+#ifndef TIMER0_H
+#define TIMER0_H
 
 /* A overflowing counter couting in steps of 10ms
  * Bit 0 = 10ms
@@ -10,6 +10,7 @@
  * Bit 5 = 320ms
  * Bit 6 = 640ms
  * Bit 7 = 1280ms */
+#define TICK_10MS  (1<<0)
 #define TICK_320MS  (1<<5)
 #define TICK_640MS  (1<<6)
 #define TICK_1280MS  (1<<7)
@@ -19,4 +20,4 @@ void timer0_init(void);
 void timer0_isr() __interrupt 1 __using 1;
 #endif
 
-#endif /* TIMER1_H */
+#endif /* TIMER0_H */
