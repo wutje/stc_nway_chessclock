@@ -3,13 +3,14 @@ STCCODESIZE ?= 4089
 SDCCOPTS ?= --code-size $(STCCODESIZE) --xram-size 0 --data-loc 0x30 --disable-warning 126 --disable-warning 59
 SDCCREV ?= -Dstc15w404as 
 STCGAL ?= stcgal/stcgal.py
-STCGALOPTS ?= 
+STCGALOPTS ?= -b 57600
 STCGALPORT ?= /dev/ttyUSB0
 STCGALPROT ?= stc15
 FLASHFILE ?= main.hex
 SYSCLK ?= 11059
 CFLAGS ?= -DFOSC=$(SYSCLK)200 -D WITH_ALT_LED9 -D WITHOUT_LEDTABLE_RELOC 
 SRC = 	src/uart.c \
+	src/buttons.c \
 	src/timer0.c \
 	$(NULL)
 

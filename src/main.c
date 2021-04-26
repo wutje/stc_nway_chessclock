@@ -13,19 +13,17 @@
 #define __critical
 extern volatile uint8_t P2 ;
 extern volatile uint8_t P3 ;
-extern volatile uint8_t P1_6 ;
-extern volatile uint8_t P3_1 ;
-extern volatile uint8_t P3_0 ;
 extern volatile uint8_t EA;
 extern volatile uint8_t WDT_CONTR;
 #else
 #include "stc15.h"
 #endif
 
+#include "timer0.h"
 #include "uart.h"
 #include "adc.h"
-#include "timer0.h"
 #include "led.h"
+#include "buttons.h"
 
 //#define DEBUG
 
@@ -61,91 +59,6 @@ static uint8_t timer_elapsed(uint8_t *timer)
 }
 
 
-volatile __bit S1_LONG;
-volatile __bit S1_PRESSED;
-volatile __bit S2_LONG;
-volatile __bit S2_PRESSED;
-volatile __bit S3_LONG;
-volatile __bit S3_PRESSED;
-
-volatile uint8_t debounce[NUM_SW];      // switch debounce buffer
-volatile uint8_t switchcount[NUM_SW];
-#define SW_CNTMAX (80*1)	//long push
-
-enum Event {
-    EV_NONE,
-    EV_S1_SHORT,
-    EV_S1_LONG,
-    EV_S2_SHORT,
-    EV_S2_LONG,
-    EV_S1S2_LONG,
-    EV_S3_SHORT,
-    EV_S3_LONG,
-    EV_TIMEOUT,
-};
-
-
-/* This stores the last event.
- * After reading this should be set to EV_NONE,
- * new events will not be processed until it is set to EV_NONE */
-static volatile enum Event event;
-
-static void read_buttons(void)
-{
-    static uint8_t t = 0;
-    /* Run only every 10ms */
-    if(t != (time_now&1))
-        return;
-    t ^= 1;
-
-    enum Event ev = EV_NONE;
-    // Check SW status and chattering control
-#define MONITOR_S(n) \
-    { \
-        uint8_t s = n - 1; \
-        /* read switch positions into sliding 8-bit window */ \
-        debounce[s] = (debounce[s] << 1) | SW ## n ; \
-        if (debounce[s] == 0) { \
-            /* down for at least 8 ticks */ \
-            S ## n ## _PRESSED = 1; \
-            if (!S ## n ## _LONG) { \
-                switchcount[s]++; \
-            } \
-        } else { \
-            /* released or bounced */ \
-            if (S ## n ## _PRESSED) { \
-                if (!S ## n ## _LONG) { \
-                    ev = EV_S ## n ## _SHORT; \
-                } \
-                S ## n ## _PRESSED = 0; \
-                S ## n ## _LONG = 0; \
-                switchcount[s] = 0; \
-            } \
-        } \
-        if (switchcount[s] > SW_CNTMAX) { \
-            S ## n ## _LONG = 1; \
-            switchcount[s] = 0; \
-            ev = EV_S ## n ## _LONG; \
-        } \
-    }
-
-    MONITOR_S(1);
-    MONITOR_S(2);
-    MONITOR_S(3);
-
-    if (ev == EV_S1_LONG && S2_PRESSED) {
-        S2_LONG = 1;
-        switchcount[1] = 0;
-        ev = EV_S1S2_LONG;
-    } else if (ev == EV_S2_LONG && S1_PRESSED) {
-        S1_LONG = 1;
-        switchcount[0] = 0;
-        ev = EV_S1S2_LONG;
-    }
-    if (event == EV_NONE) {
-        event = ev;
-    }
-}
 
 static void display_scan_out(void)
 {
@@ -174,34 +87,6 @@ static void display_scan_out(void)
         LED_DIGITS_PORT &= tmp;
     }
 }
-
-/*
-// macro expansion for MONITOR_S(1)
-{
-    uint8_t s = 1 - 1;
-    debounce[s] = (debounce[s] << 1) | SW1 ;
-    if (debounce[s] == 0) {
-        S_PRESSED = 1;
-        if (!S_LONG) {
-            switchcount[s]++;
-        }
-    } else {
-        if (S1_PRESSED) {
-            if (!S1_LONG) {
-                ev = EV_S1_SHORT;
-            }
-            S1_PRESSED = 0;
-            S1_LONG = 0;
-            switchcount[s] = 0;
-        }
-    }
-    if (switchcount[s] > SW_CNTMAX) {
-        S1_LONG = 1;
-        switchcount[s] = 0;
-        ev = EV_S1_LONG;
-    }
-}
-*/
 
 #if 0
 uint8_t  temp;      // temperature sensor value
@@ -252,17 +137,18 @@ enum StateMachine {
     SM_PASS_CHECK_SLAVE,    //18
     SM_BTN_RECOVER,         //19
     SM_BTN_RECOVER2,        //20
+    SM_IS_MY_TURN,          //21
 };
 
 static uint8_t recovery_btn_is_pressed(void) {
-    enum Event ev = event;
+    enum ButtonEvent ev = event;
     /* We handled it so clear! */
     event = EV_NONE;
     return ev == EV_S3_LONG;
 }
 
 static uint8_t btn_is_pressed(void) {
-    enum Event ev = event;
+    enum ButtonEvent ev = event;
     /* We handled it so clear! */
     event = EV_NONE;
     return ev == EV_S3_SHORT;
@@ -270,7 +156,7 @@ static uint8_t btn_is_pressed(void) {
 
 static uint8_t msg_available(void) {
     uint8_t rx;
-    /* Test&clear in atomically */
+    /* Test&clear it atomically */
     __critical {
         rx = rx_packet_available;
         rx_packet_available = 0;
@@ -278,15 +164,26 @@ static uint8_t msg_available(void) {
     return rx;
 }
 
-#define MAX_NR_OF_PLAYERS 4 //only 4 clocks for now
+
+enum RuntimeCfg
+{
+    RUN_CFG_BUZZER  = 1<<0,
+    RUN_CFG_DEBUG   = 1<<1,
+};
+static enum RuntimeCfg cfg = RUN_CFG_BUZZER;
+
+//only 4 clocks for now
+#define MAX_NR_OF_PLAYERS 4
+#define INIT_VALUE  (0xFF)
 
 static uint8_t id; //my assigned ID
 static uint8_t nr_of_players; //Detected number of players
+static uint8_t active_player_id;
 static uint16_t remaining_time[MAX_NR_OF_PLAYERS];
 
 static void send_assign(uint8_t your_id, uint16_t cfg_time)
 {
-    uart1_send_packet(OPC_ASSIGN, your_id, 'x', 'x', cfg_time);
+    uart1_send_packet(OPC_ASSIGN, your_id, nr_of_players, active_player_id, cfg_time);
 }
 
 static void send_passon(uint8_t ttl)
@@ -299,7 +196,7 @@ static void send_passon(uint8_t ttl)
 
 static void send_claim(uint8_t id, uint16_t rem_time)
 {
-    uart1_send_packet(OPC_CLAIM, id, nr_of_players, 'x', rem_time);
+    uart1_send_packet(OPC_CLAIM, id, nr_of_players, cfg, rem_time);
 }
 
 /* Displaying chars is non-trivial, so I added this convenience macro */
@@ -372,17 +269,35 @@ static void panic_animation(void)
     display_char(0, 'F');
 }
 
-static uint8_t beep_timer = 0;
+static uint8_t beep_timer = 10 * TMO_100MS;
 
 static void handle_beep(void)
 {
     if (timer_elapsed(&beep_timer)) {
         BUZZER_OFF;
     } else {
-        if(1) {
+        if(cfg & RUN_CFG_BUZZER) {
             BUZZER_ON;
         }
     }
+}
+
+static uint8_t save_claim_data(void)
+{
+    //CLAIM message
+    uint8_t other_id = rx_buf[1];
+    //nr_of_players    = rx_buf[2];
+    cfg              = rx_buf[3];
+    uint16_t secs = (uint16_t)rx_buf[4] << 8 | rx_buf[5];
+    if(other_id != id) {
+        /* keep track of its time, if it is valid.
+         * Otherwise keep existing time.
+         * This means we will send the 'original' time in a
+         * claim message */
+        if( secs < 90 * 60)
+            remaining_time[other_id] = secs;
+    }
+    return other_id;
 }
 
 static void statemachine(void)
@@ -393,7 +308,7 @@ static void statemachine(void)
     static uint8_t game_duration_in_min;
     static uint8_t decrement_timer;
     static uint16_t other_player_time;
-    static uint8_t active_player_id;
+    static uint8_t cfg_state;
 
     /* If state machine should wait, do so */
     if(!timer_elapsed(&statemachine_delay)) {
@@ -413,52 +328,89 @@ static void statemachine(void)
     {
         case SM_START:
             /* Init 'global' variables */
-            id = 0;
+            id = 0xFF;
             other_player_time = 0;
             game_duration_in_min = 30;
+            active_player_id = INIT_VALUE;
             nr_of_players = 0;
+            memset(remaining_time, 0xFF, sizeof(remaining_time));
             if(!btn_is_pressed())
                 state = SM_BTN_INIT;
             break;
 
         case SM_BTN_INIT:
-            if(time_now & TICK_320MS) {
-                /* Also works for hours and minutes :D */
-                display_seconds_as_minutes(game_duration_in_min);
-            } else {
-                clearTmpDisplay();
-            }
-
-            /* Go check for received data
-             * unless button 3 is pressed */
-            state = SM_MSG_SLAVE;
-
-            switch(event){
-                case EV_S1_SHORT:
-                    if(game_duration_in_min < 90)
-                        game_duration_in_min += 5;
-                    break;
-                case EV_S2_SHORT:
-                    if(game_duration_in_min > 5)
-                        game_duration_in_min -= 5;
-                    break;
-                case EV_S3_SHORT:
-                    /* We are master! kick off by sending assign */
-                    id = 0;
-                    seconds_left = game_duration_in_min * 60;
-                    for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
-                        remaining_time[i] = seconds_left;
+            switch(cfg_state) {
+                case 0:
+                    if(time_now & TICK_320MS) {
+                        /* Also works for hours and minutes :D */
+                        display_seconds_as_minutes(game_duration_in_min);
                     }
-                    send_assign(id + 1, seconds_left); //Next is player 1
-                    set_timer(&beep_timer, 1 * TMO_10MS);
-                    state = SM_MSG_MASTER;
+
+                    /* Go check for received data
+                     * unless button 3 is pressed */
+                    state = SM_MSG_SLAVE;
+
+                    switch(event){
+                        case EV_S1_SHORT:
+                            if(game_duration_in_min < 90)
+                                game_duration_in_min += 5;
+                            break;
+                        case EV_S2_SHORT:
+                            if(game_duration_in_min > 5)
+                                game_duration_in_min -= 5;
+                            break;
+                        case EV_S3_SHORT:
+                            /* We are master! kick off by sending assign */
+                            id = 0;
+                            seconds_left = game_duration_in_min * 60;
+                            for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                                remaining_time[i] = seconds_left;
+                            }
+                            send_assign(id + 1, seconds_left); //Next is player 1
+                            set_timer(&beep_timer, 1 * TMO_10MS);
+                            state = SM_MSG_MASTER;
+                            break;
+                        default:
+                            break;
+                    }
                     break;
-                default:
-                    break;
+
+                case 1:
+                    display_val(!!(cfg & RUN_CFG_BUZZER));
+                    display_char(0, 'B');
+
+                    switch(event){
+                        case EV_S1_SHORT:
+                        case EV_S2_SHORT:
+                            cfg ^= RUN_CFG_BUZZER;
+                            break;
+                        default:
+                            break;
+                    }
+                break;
+
+                case 2:
+                    display_val(!!(cfg & RUN_CFG_DEBUG));
+                    display_char(0, 'D');
+
+                    switch(event){
+                        case EV_S1_SHORT:
+                        case EV_S2_SHORT:
+                            cfg ^= RUN_CFG_DEBUG;
+                            break;
+                        default:
+                            break;
+                    }
             }
+
+            if(event == EV_S1S2_LONG) {
+                cfg_state++;
+                if(cfg_state > 2)
+                    cfg_state = 0;
+            }
+
             /* We handled the event so clear it */
-            if(event != EV_NONE)
-                event = EV_NONE;
+            event = EV_NONE;
 
             break;
 
@@ -494,27 +446,43 @@ static void statemachine(void)
                  * save our id
                  * and the game time */
                 id = rx_buf[1];
+                active_player_id = rx_buf[3];
                 seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
-                for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
-                    remaining_time[i] = seconds_left;
+                if(active_player_id == INIT_VALUE) {
+                    for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                        remaining_time[i] = seconds_left;
+                    }
+                    /* Only send assign if no active player: aka during init */
+                    send_assign(id + 1, seconds_left);
                 }
-                send_assign(id + 1, seconds_left);
-                state = SM_MSG;
+                else {
+                   /* nr of player is NOT valid on INIT_VALUE.
+                    * Only after setup is it valid */
+                   nr_of_players = rx_buf[2];
+                }
+                state = SM_IS_MY_TURN;
             } else {
                 state = SM_IS_CLAIM_SLAVE;
             }
             break;
 
+        case SM_IS_MY_TURN:
+            if(active_player_id == id) {
+                //Send claim since we are the current active player
+                send_claim(id, seconds_left);
+                state = SM_MSG_CLAIM;
+            }
+            else {
+                state = SM_MSG;
+            }
+            break;
+
         case SM_IS_CLAIM_SLAVE:
+            /* If this happens the game started but we did not see the ASSIGN.
+             * Simply save other player data and keep waiting for PASSON. */
             if(rx_buf[0] == OPC_CLAIM) {
-                /* Forward message as is */
-                //CLAIM message
-                uint8_t other_id = rx_buf[1];
-                nr_of_players    = rx_buf[2];
-                //                 rx_buf[3]; //Unused for now
-                uint16_t secs    = rx_buf[4];
-                secs = secs << 8 | rx_buf[5];
-                send_claim(other_id, secs);
+                uint8_t other_id = save_claim_data();
+                send_claim(other_id, remaining_time[other_id]);
                 state = SM_MSG_SLAVE;
             } else {
                 state = SM_IS_PASS_SLAVE;
@@ -527,15 +495,18 @@ static void statemachine(void)
             state = SM_PASS_CHECK_SLAVE;
             break;
 
+        /* Receving a passon while in SETUP state */
         case SM_PASS_CHECK_SLAVE:
             {
                 if(rx_buf[3] == 0) { //ttl
-                    /* Save data from this message!
+                    /* Save data from this message!. It contains our id!
                      * PASSON */
                     id               = rx_buf[1]; //This my id, if ttl is 0
                     nr_of_players    = rx_buf[2];
                     //uint8_t ttl      = rx_buf[3];
                     seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
+                    //Best guess, for next player
+                    remaining_time[(id + 1) % nr_of_players] = seconds_left;
                     state = SM_MSG_CLAIM;
                 }
                 else
@@ -565,8 +536,12 @@ static void statemachine(void)
             break;
 
         case SM_IS_ASSIGN:
-            ASSERT(rx_buf[0] != OPC_ASSIGN);
-            state = SM_IS_PASS;
+            if(rx_buf[0] == OPC_ASSIGN) {
+                /* Drop it. Someone is pressing button but we are already okay. */
+                state = SM_MSG;
+            }else {
+                state = SM_IS_PASS;
+            }
             break;
 
         case SM_IS_PASS:
@@ -585,37 +560,30 @@ static void statemachine(void)
         case SM_CLAIM_CHECK:
             {
                 //CLAIM message
-                uint8_t other_id = rx_buf[1];
-                nr_of_players    = rx_buf[2];
-                //                 rx_buf[3]; //Unused for now
-                uint16_t secs    = rx_buf[4];
-                secs = secs << 8 | rx_buf[5];
-                if(other_id == id) {
-                    state = SM_MSG;
-                } else {
-                    /* Send message onto the assigned one. But keep track
-                     * of its time */
-                    remaining_time[other_id] = secs;
+                uint8_t other_id = save_claim_data();
+                if(other_id != id) {
+                    /* Send message onto the assigned one.
+                     * But keep track of its time */
                     active_player_id = other_id;
-                    send_claim(other_id, secs);
-                    state = SM_MSG;
+                    send_claim(other_id, remaining_time[other_id]);
                 }
                 //Counter reset voor display
                 set_timer(&decrement_timer, 1 * TMO_SECOND);
                 other_player_time = 0;
+                state = SM_MSG;
             }
             break;
 
         case SM_TTL_CHECK:
             {
                 //PASSON message
-                uint8_t r_id     = rx_buf[1]; //This my id, if ttl is 0
+                //uint8_t r_id     = rx_buf[1]; //This my id, if ttl is 0
                 nr_of_players    = rx_buf[2];
                 uint8_t ttl      = rx_buf[3];
-                uint16_t secs    = rx_buf[4];
-                secs = secs << 8 | rx_buf[5];
+                //uint16_t secs    = rx_buf[4];
+                //secs = secs << 8 | rx_buf[5];
                 if(ttl == 0) {
-                    send_claim(r_id, secs);
+                    send_claim(id, seconds_left);
                     set_timer(&beep_timer, 3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
@@ -642,6 +610,7 @@ static void statemachine(void)
             break;
 
         case SM_MSG_CLAIM:
+            print4char("RECO");
             if (msg_available()) {
                 state = SM_IS_CLAIM2;
             } else {
@@ -657,8 +626,9 @@ static void statemachine(void)
             break;
 
         case SM_IS_CLAIM2:
-            ASSERT((rx_buf[0] == OPC_CLAIM));
-            /* TODO save data in claim in case we are not yet booted */
+            ASSERT((rx_buf[0] == OPC_CLAIM) && (rx_buf[1] == id));
+
+            /* We got OUR claim back. So lets start down counting! */
             set_timer(&decrement_timer, 1 * TMO_SECOND);
             /* Always have atleast 60 seconds of play */
             if(seconds_left < 60)
@@ -688,10 +658,11 @@ static void statemachine(void)
 
         case SM_BTN_RECOVER:
             /* Dirty hack: print the same as SM_MSG would do */
-            display_seconds_as_minutes(other_player_time);
+            //display_seconds_as_minutes(other_player_time);
             if(recovery_btn_is_pressed())
             {
-                send_passon(0); // ttl 0 = next
+                uint8_t next_id = (id + 1) % nr_of_players;
+                send_assign(next_id, remaining_time[next_id]);
             }
             state = SM_MSG;
             break;
@@ -699,7 +670,8 @@ static void statemachine(void)
 
     /* If nothing on screen, show current state.
      * Usefull debugging aid. */
-    if (tmpbuf[0]==LED_BLANK &&
+    if ((cfg & RUN_CFG_DEBUG) &&
+        tmpbuf[0]==LED_BLANK &&
         tmpbuf[1]==LED_BLANK &&
         tmpbuf[2]==LED_BLANK &&
         tmpbuf[3]==LED_BLANK)
@@ -707,32 +679,28 @@ static void statemachine(void)
         display_val(state);
     }
 
-    /* Copy buffer to buffer used by ISR to scan out */
-    __critical {
-        updateTmpDisplay();
-    }
-
+    /* Copy buffer to buffer used by scan out */
+    updateTmpDisplay();
 }
 
-/*********************************************/
 int main()
 {
-    // SETUP
-    timer0_init(); // display refresh & switch read
+    /* Init the hardware  */
+    timer0_init();
 
-    uart1_init();   // setup uart
+    uart1_init();
 
-    EA = 1;         // Enable global interrupt
+    /* Enable interrupts, AFTER hardware setup */
+    EA = 1;
 
     // LOOP
     while (1)
     {
         handle_beep();
-        read_buttons();
+        buttons_read();
         display_scan_out();
         statemachine();
 
         WDT_CLEAR();
     }
 }
-/* ------------------------------------------------------------------------- */
