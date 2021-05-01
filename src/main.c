@@ -434,13 +434,29 @@ static void statemachine(void)
         case SM_MSG_MASTER:
             print4char("DEAD");
             if (msg_available()) {
-                state = SM_IS_ASSIGN_MASTER;
+                switch(rx_buf[0])
+                {
+                    /* If we receive an assign verify it is one we expect! */
+                    case OPC_ASSIGN:
+                        if(rx_buf[3] == INIT_VALUE)
+                            state = SM_IS_ASSIGN_MASTER;
+                        else
+                            state = SM_IS_ASSIGN_SLAVE;
+                        break;
+
+                    /* For the other two message we fallback as if
+                     * we are not the master */
+                    case OPC_PASSON:
+                        state = SM_PASS_CHECK_SLAVE;
+                        break;
+                    case OPC_CLAIM:
+                        state = SM_IS_CLAIM_SLAVE;
+                        break;
+                }
             }
             break;
 
         case SM_IS_ASSIGN_MASTER:
-            /* Only accept assign if duration matches */
-            ASSERT(rx_buf[0] == OPC_ASSIGN );
             {
                 uint8_t l = 42; //Random...
                 nr_of_players = rx_buf[1]; //last id
