@@ -194,9 +194,22 @@ static void send_passon(uint8_t ttl)
     uart1_send_packet(OPC_PASSON, next_id, nr_of_players, ttl, rem_time);
 }
 
-static void send_claim(uint8_t id, uint16_t rem_time)
+static inline void send_claim(uint8_t id, uint16_t rem_time)
 {
     uart1_send_packet(OPC_CLAIM, id, nr_of_players, cfg, rem_time);
+}
+
+static inline void send_other_claim(uint8_t id)
+{
+    uint16_t rem_time = remaining_time[id];
+    if(rem_time >= 60 * 90)
+        rem_time = 0xFFFF; //Send illegal if we do not know
+    send_claim(id, rem_time);
+}
+
+static inline void send_my_claim(uint16_t rem_time)
+{
+    send_claim(id, rem_time);
 }
 
 /* Displaying chars is non-trivial, so I added this convenience macro */
@@ -269,7 +282,7 @@ static void panic_animation(void)
     display_char(0, 'F');
 }
 
-static uint8_t beep_timer = 10 * TMO_100MS;
+static uint8_t beep_timer = 1 * TMO_100MS;
 
 static void handle_beep(void)
 {
@@ -290,7 +303,7 @@ static uint8_t save_claim_data(void)
     cfg              = rx_buf[3];
     uint16_t secs = (uint16_t)rx_buf[4] << 8 | rx_buf[5];
     if(other_id != id) {
-        /* keep track of its time, if it is valid.
+        /* keep track of its time, but only if it is valid.
          * Otherwise keep existing time.
          * This means we will send the 'original' time in a
          * claim message */
@@ -329,6 +342,7 @@ static void statemachine(void)
         case SM_START:
             /* Init 'global' variables */
             id = 0xFF;
+            seconds_left = 0xFFFF;
             other_player_time = 0;
             game_duration_in_min = 30;
             active_player_id = INIT_VALUE;
@@ -339,74 +353,77 @@ static void statemachine(void)
             break;
 
         case SM_BTN_INIT:
-            switch(cfg_state) {
-                case 0:
-                    if(time_now & TICK_320MS) {
-                        /* Also works for hours and minutes :D */
-                        display_seconds_as_minutes(game_duration_in_min);
-                    }
+            /* Go check for received data
+             * unless button 3 is pressed */
+            state = SM_MSG_SLAVE;
 
-                    /* Go check for received data
-                     * unless button 3 is pressed */
-                    state = SM_MSG_SLAVE;
-
-                    switch(event){
-                        case EV_S1_SHORT:
-                            if(game_duration_in_min < 90)
-                                game_duration_in_min += 5;
-                            break;
-                        case EV_S2_SHORT:
-                            if(game_duration_in_min > 5)
-                                game_duration_in_min -= 5;
-                            break;
-                        case EV_S3_SHORT:
-                            /* We are master! kick off by sending assign */
-                            id = 0;
-                            seconds_left = game_duration_in_min * 60;
-                            for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
-                                remaining_time[i] = seconds_left;
-                            }
-                            send_assign(id + 1, seconds_left); //Next is player 1
-                            set_timer(&beep_timer, 1 * TMO_10MS);
-                            state = SM_MSG_MASTER;
-                            break;
-                        default:
-                            break;
-                    }
-                    break;
-
-                case 1:
-                    display_val(!!(cfg & RUN_CFG_BUZZER));
-                    display_char(0, 'B');
-
-                    switch(event){
-                        case EV_S1_SHORT:
-                        case EV_S2_SHORT:
-                            cfg ^= RUN_CFG_BUZZER;
-                            break;
-                        default:
-                            break;
-                    }
-                break;
-
-                case 2:
-                    display_val(!!(cfg & RUN_CFG_DEBUG));
-                    display_char(0, 'D');
-
-                    switch(event){
-                        case EV_S1_SHORT:
-                        case EV_S2_SHORT:
-                            cfg ^= RUN_CFG_DEBUG;
-                            break;
-                        default:
-                            break;
-                    }
-            }
-
-            if(event == EV_S1S2_LONG) {
+            /* S3 is start game */
+            if(event == EV_S3_SHORT)
+            {
+                /* We are master! kick off by sending assign */
+                id = 0;
+                seconds_left = game_duration_in_min * 60;
+                for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                    remaining_time[i] = seconds_left;
+                }
+                send_assign(id + 1, seconds_left); //Next is player 1
+                set_timer(&beep_timer, 1 * TMO_10MS);
+                state = SM_MSG_MASTER;
+            /* S1 + S2 is change option we are editting */
+            } else if(event == EV_S1S2_LONG) {
+                /* Change cfg */
                 cfg_state++;
                 if(cfg_state > 2)
                     cfg_state = 0;
+            } else {
+                /* All other options edit the current option */
+                switch(cfg_state) {
+                    case 0:
+                        if(time_now & TICK_320MS) {
+                            display_seconds_as_minutes(game_duration_in_min);
+                        }
+
+                        switch(event){
+                            case EV_S1_SHORT:
+                                if(game_duration_in_min < 90)
+                                    game_duration_in_min += 5;
+                                break;
+                            case EV_S2_SHORT:
+                                if(game_duration_in_min > 5)
+                                    game_duration_in_min -= 5;
+                                break;
+                            default:
+                                break;
+                        }
+                        break;
+
+                    case 1:
+                        display_val(!!(cfg & RUN_CFG_BUZZER));
+                        display_char(0, 'B');
+
+                        switch(event){
+                            case EV_S1_SHORT:
+                            case EV_S2_SHORT:
+                                cfg ^= RUN_CFG_BUZZER;
+                                break;
+                            default:
+                                break;
+                        }
+                        break;
+
+                    case 2:
+                        display_val(!!(cfg & RUN_CFG_DEBUG));
+                        display_char(0, 'D');
+
+                        switch(event){
+                            case EV_S1_SHORT:
+                            case EV_S2_SHORT:
+                                cfg ^= RUN_CFG_DEBUG;
+                                break;
+                            default:
+                                break;
+                        }
+                }
             }
 
             /* We handled the event so clear it */
@@ -469,7 +486,7 @@ static void statemachine(void)
         case SM_IS_MY_TURN:
             if(active_player_id == id) {
                 //Send claim since we are the current active player
-                send_claim(id, seconds_left);
+                send_my_claim(seconds_left);
                 state = SM_MSG_CLAIM;
             }
             else {
@@ -482,7 +499,7 @@ static void statemachine(void)
              * Simply save other player data and keep waiting for PASSON. */
             if(rx_buf[0] == OPC_CLAIM) {
                 uint8_t other_id = save_claim_data();
-                send_claim(other_id, remaining_time[other_id]);
+                send_other_claim(other_id);
                 state = SM_MSG_SLAVE;
             } else {
                 state = SM_IS_PASS_SLAVE;
@@ -565,7 +582,7 @@ static void statemachine(void)
                     /* Send message onto the assigned one.
                      * But keep track of its time */
                     active_player_id = other_id;
-                    send_claim(other_id, remaining_time[other_id]);
+                    send_other_claim(other_id);
                 }
                 //Counter reset voor display
                 set_timer(&decrement_timer, 1 * TMO_SECOND);
@@ -583,7 +600,7 @@ static void statemachine(void)
                 //uint16_t secs    = rx_buf[4];
                 //secs = secs << 8 | rx_buf[5];
                 if(ttl == 0) {
-                    send_claim(id, seconds_left);
+                    send_my_claim(seconds_left);
                     set_timer(&beep_timer, 3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
