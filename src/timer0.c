@@ -4,6 +4,20 @@
 
 volatile uint8_t time_now;
 
+/* Keep calling this function to make sure
+ * the timer stays elapsed */
+bool timer_elapsed(uint8_t *timer)
+{
+    uint8_t t = *timer;
+    t -= time_now;
+    if(t > 0x80)
+    {
+        *timer = time_now - 1;
+        return true;
+    }
+    return false;
+}
+
 /*
   interrupt: every 0.1ms=100us come here
 

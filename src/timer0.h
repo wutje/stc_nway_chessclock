@@ -1,6 +1,9 @@
 #ifndef TIMER0_H
 #define TIMER0_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* A overflowing counter couting in steps of 10ms
  * Bit 0 = 10ms
  * Bit 1 = 20ms
@@ -19,5 +22,15 @@ void timer0_init(void);
 #ifndef __GNUC__
 void timer0_isr() __interrupt 1 __using 1;
 #endif
+
+bool timer_elapsed(uint8_t *timer);
+
+#define TMO_10MS 1
+#define TMO_100MS 10
+#define TMO_SECOND 100
+static inline void set_timer(uint8_t *timer, uint8_t tmo)
+{
+    *timer = time_now + tmo;
+}
 
 #endif /* TIMER0_H */

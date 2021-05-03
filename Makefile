@@ -11,6 +11,7 @@ SYSCLK ?= 11059
 CFLAGS ?= -DFOSC=$(SYSCLK)200 -D WITH_ALT_LED9 -D WITHOUT_LEDTABLE_RELOC 
 SRC = 	src/uart.c \
 	src/buttons.c \
+	src/beep.c \
 	src/timer0.c \
 	$(NULL)
 

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #ifdef __GNUC__
 #define __bit uint8_t
 #define __interrupt
@@ -24,6 +25,7 @@ extern volatile uint8_t WDT_CONTR;
 #include "adc.h"
 #include "led.h"
 #include "buttons.h"
+#include "beep.h"
 
 //#define DEBUG
 
@@ -35,30 +37,6 @@ extern volatile uint8_t WDT_CONTR;
 
 // hardware configuration
 #include "hwconfig.h"
-
-#define TMO_10MS 1
-#define TMO_100MS 10
-#define TMO_SECOND 100
-static void set_timer(uint8_t *timer, uint8_t tmo)
-{
-    *timer = time_now + tmo;
-}
-
-/* Keep calling this function to make sure
- * the timer stays elapsed */
-static uint8_t timer_elapsed(uint8_t *timer)
-{
-    uint8_t t = *timer;
-    t -= time_now;
-    if(t > 0x80)
-    {
-        *timer = time_now - 1;
-        return 1;
-    }
-    return 0;
-}
-
-
 
 static void display_scan_out(void)
 {
@@ -282,19 +260,6 @@ static void panic_animation(void)
     display_char(0, 'F');
 }
 
-static uint8_t beep_timer = 1 * TMO_100MS;
-
-static void handle_beep(void)
-{
-    if (timer_elapsed(&beep_timer)) {
-        BUZZER_OFF;
-    } else {
-        if(cfg & RUN_CFG_BUZZER) {
-            BUZZER_ON;
-        }
-    }
-}
-
 static uint8_t save_claim_data(void)
 {
     //CLAIM message
@@ -367,7 +332,7 @@ static void statemachine(void)
                     remaining_time[i] = seconds_left;
                 }
                 send_assign(id + 1, seconds_left); //Next is player 1
-                set_timer(&beep_timer, 1 * TMO_10MS);
+                beep_start(1 * TMO_10MS);
                 state = SM_MSG_MASTER;
             /* S1 + S2 is change option we are editting */
             } else if(event == EV_S1S2_LONG) {
@@ -548,7 +513,7 @@ static void statemachine(void)
             break;
 
         case SM_PANIC:
-            set_timer(&beep_timer, 1 * TMO_10MS);
+            beep_start(1 * TMO_10MS);
             panic_animation();
             break;
 
@@ -617,12 +582,12 @@ static void statemachine(void)
                 //secs = secs << 8 | rx_buf[5];
                 if(ttl == 0) {
                     send_my_claim(seconds_left);
-                    set_timer(&beep_timer, 3 * TMO_100MS);
+                    beep_start(3 * TMO_100MS);
                     state = SM_MSG_CLAIM;
                 } else {
                     /* TTL != 0 means we are in discovery mode! */
                     uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
-                    set_timer(&beep_timer, tmo);
+                    beep_start(tmo);
 
                     /* Add 'silence' by waiting a little longer before continuing */
                     set_timer(&statemachine_delay, tmo + 2 * TMO_10MS);
@@ -674,7 +639,7 @@ static void statemachine(void)
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
                 send_passon(0); // ttl 0 = next
-                set_timer(&beep_timer, 1 * TMO_10MS);
+                beep_start(1 * TMO_10MS);
                 state = SM_MSG;
             }
             else {
@@ -684,7 +649,7 @@ static void statemachine(void)
                     if(seconds_left)
                         seconds_left--;
                     else
-                        set_timer(&beep_timer, 1 * TMO_10MS);
+                        beep_start(1 * TMO_10MS);
                 }
             }
             break;
@@ -729,7 +694,7 @@ int main()
     // LOOP
     while (1)
     {
-        handle_beep();
+        beep_handle(!!(cfg & RUN_CFG_BUZZER));
         buttons_read();
         display_scan_out();
         statemachine();
