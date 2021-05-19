@@ -32,9 +32,6 @@ extern volatile uint8_t WDT_CONTR;
 // clear wdt
 #define WDT_CLEAR()    (WDT_CONTR |= 1 << 4)
 
-//Jump to panic state
-#define ASSERT(x) {if (!(x)) {state = SM_PANIC; break;} }
-
 // hardware configuration
 #include "hwconfig.h"
 
@@ -51,16 +48,9 @@ static void display_scan_out(void)
     if(++displaycounter > 8)
         displaycounter = 0;
 
-    // auto dimming, skip lighting for some cycles
     if (displaycounter < 4 ) {
-        // display refresh ISR
-        // cycle thru digits one at a time
         uint8_t digit = displaycounter;
-        // fill digits
         LED_SEGMENT_PORT = dbuf[digit];
-        // turn on selected digit, set low
-        //LED_DIGIT_ON(digit);
-        // issue #32, fix for newer sdcc versions which are using non-atomic port access
         tmp = ~((1<<LED_DIGITS_PORT_BASE) << digit);
         LED_DIGITS_PORT &= tmp;
     }
@@ -94,28 +84,13 @@ int8_t gettemp(uint16_t raw) {
 #endif
 
 enum StateMachine {
-    SM_START,
-    SM_BTN_INIT,
-    SM_MSG_MASTER,
-    SM_IS_ASSIGN_MASTER,
-    SM_MSG_SLAVE,
-    SM_IS_ASSIGN_SLAVE,
-    SM_PANIC,
-    SM_MSG,
-    SM_IS_ASSIGN,
-    SM_IS_PASS,
-    SM_IS_CLAIM,
-    SM_CLAIM_CHECK,
-    SM_TTL_CHECK,
-    SM_MSG_CLAIM,
-    SM_IS_CLAIM2,
-    SM_BTN,                 //15
-    SM_IS_CLAIM_SLAVE,      //16
-    SM_IS_PASS_SLAVE,       //17
-    SM_PASS_CHECK_SLAVE,    //18
-    SM_BTN_RECOVER,         //19
-    SM_BTN_RECOVER2,        //20
-    SM_IS_MY_TURN,          //21
+    SM_START,         //0
+    SM_BTN_INIT,      //1
+    SM_MSG_MASTER,    //2
+    SM_MSG_SLAVE,     //3
+    SM_MSG,           //4
+    SM_MSG_CLAIM,     //5
+    SM_BTN,           //6
 };
 
 static uint8_t recovery_btn_is_pressed(void) {
@@ -143,8 +118,12 @@ static uint8_t msg_available(void) {
 }
 
 
+/* Runtime config:
+ * buzzer: enable the buzzer
+ * debug: show state if nothing else is shown */
 enum RuntimeCfg
 {
+    RUN_CFG_NONE    = 0,
     RUN_CFG_BUZZER  = 1<<0,
     RUN_CFG_DEBUG   = 1<<1,
 };
@@ -251,15 +230,6 @@ static void display_val(uint8_t val)
     filldisplay(3, dig);
 }
 
-/* The last state before we reached the panic state */
-static enum StateMachine err;
-
-static void panic_animation(void)
-{
-    display_val(err);
-    display_char(0, 'F');
-}
-
 static uint8_t save_claim_data(void)
 {
     //CLAIM message
@@ -297,14 +267,9 @@ static void statemachine(void)
      * whoever sets the timer also has a one time option to set the screen. */
     clearTmpDisplay();
 
-    /* Save last state before panic so in panic we can show it */
-    if(state != SM_PANIC) {
-        err = state;
-    }
-
     switch (state)
     {
-        case SM_START:
+        case SM_START: // 0
             /* Init 'global' variables */
             id = 0xFF;
             seconds_left = 0xFFFF;
@@ -312,15 +277,17 @@ static void statemachine(void)
             game_duration_in_min = 30;
             active_player_id = INIT_VALUE;
             nr_of_players = 0;
+            cfg_state = 0;
             memset(remaining_time, 0xFF, sizeof(remaining_time));
-            if(!btn_is_pressed())
-                state = SM_BTN_INIT;
+            state = SM_BTN_INIT;
             break;
 
-        case SM_BTN_INIT:
-            /* Go check for received data
-             * unless button 3 is pressed */
-            state = SM_MSG_SLAVE;
+        case SM_BTN_INIT: // 1
+            /* Go check for received data first */
+            if (msg_available()) {
+                state = SM_MSG_SLAVE;
+                break;
+            }
 
             /* S3 is start game */
             if(event == EV_S3_SHORT)
@@ -393,133 +360,166 @@ static void statemachine(void)
 
             /* We handled the event so clear it */
             event = EV_NONE;
-
             break;
 
-        case SM_MSG_MASTER:
+        case SM_MSG_MASTER: // 2
             print4char("DEAD");
             if (msg_available()) {
-                switch(rx_buf[0])
-                {
-                    /* If we receive an assign verify it is one we expect! */
+                switch((enum OPC)rx_buf[0]){
                     case OPC_ASSIGN:
+                        /* We got our assign back, so start the game! */
                         if(rx_buf[3] == INIT_VALUE)
-                            state = SM_IS_ASSIGN_MASTER;
-                        else
-                            state = SM_IS_ASSIGN_SLAVE;
+                        {
+                            uint8_t l = 42; //Random...
+                            nr_of_players = rx_buf[1]; //last id
+                            send_passon(l);
+                            state = SM_MSG;
+                        } else {
+                            state = SM_MSG_SLAVE;
+                        }
                         break;
 
                     /* For the other two message we fallback as if
                      * we are not the master */
                     case OPC_PASSON:
-                        state = SM_PASS_CHECK_SLAVE;
+                        state = SM_MSG_SLAVE;
                         break;
                     case OPC_CLAIM:
-                        state = SM_IS_CLAIM_SLAVE;
+                        state = SM_MSG_SLAVE;
+                        break;
+
+                    case OPC_PANIC:
                         break;
                 }
             }
             break;
 
-        case SM_IS_ASSIGN_MASTER:
-            {
-                uint8_t l = 42; //Random...
-                nr_of_players = rx_buf[1]; //last id
-                send_passon(l);
-                state = SM_MSG;
-            }
-            break;
-
-        case SM_MSG_SLAVE:
-            if (msg_available()) {
-                state = SM_IS_ASSIGN_SLAVE;
-            } else {
-                state = SM_BTN_INIT;
-            }
-            break;
-
-        case SM_IS_ASSIGN_SLAVE:
-            if(rx_buf[0] == OPC_ASSIGN) {
-                /* Yeah! we got an assign message:
-                 * save our id
-                 * and the game time */
-                id = rx_buf[1];
-                active_player_id = rx_buf[3];
-                seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
-                if(active_player_id == INIT_VALUE) {
-                    for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
-                        remaining_time[i] = seconds_left;
+        case SM_MSG_SLAVE: //3
+            switch((enum OPC)rx_buf[0]){
+                case OPC_ASSIGN:
+                    /* Yeah! we got an assign message:
+                     * save our id
+                     * and the game time */
+                    id = rx_buf[1];
+                    active_player_id = rx_buf[3];
+                    seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
+                    if(active_player_id == INIT_VALUE) {
+                        /* Init fase */
+                        for(uint8_t i = 0 ; i < MAX_NR_OF_PLAYERS; i++) {
+                            remaining_time[i] = seconds_left;
+                        }
+                        send_assign(id + 1, seconds_left);
+                        state = SM_MSG;
+                    } else {
+                        /* Whoops game already started!
+                         * nr_of_players is NOT valid on INIT_VALUE.
+                         */
+                        nr_of_players = rx_buf[2];
+                        if(active_player_id == id) {
+                            //Send claim since we are the current active player
+                            send_my_claim(seconds_left);
+                            state = SM_MSG_CLAIM;
+                        } else {
+                            /* Go wait for any message, game started already */
+                            state = SM_MSG;
+                        }
                     }
-                    /* Only send assign if no active player: aka during init */
-                    send_assign(id + 1, seconds_left);
-                }
-                else {
-                   /* nr of player is NOT valid on INIT_VALUE.
-                    * Only after setup is it valid */
-                   nr_of_players = rx_buf[2];
-                }
-                state = SM_IS_MY_TURN;
-            } else {
-                state = SM_IS_CLAIM_SLAVE;
-            }
-            break;
+                    break;
 
-        case SM_IS_MY_TURN:
-            if(active_player_id == id) {
-                //Send claim since we are the current active player
-                send_my_claim(seconds_left);
-                state = SM_MSG_CLAIM;
-            }
-            else {
-                state = SM_MSG;
-            }
-            break;
-
-        case SM_IS_CLAIM_SLAVE:
-            /* If this happens the game started but we did not see the ASSIGN.
-             * Simply save other player data and keep waiting for PASSON. */
-            if(rx_buf[0] == OPC_CLAIM) {
-                uint8_t other_id = save_claim_data();
-                send_other_claim(other_id);
-                state = SM_MSG_SLAVE;
-            } else {
-                state = SM_IS_PASS_SLAVE;
-            }
-            break;
-
-        case SM_IS_PASS_SLAVE:
-            /* If anything other then PASSON give up, we tried all. */
-            ASSERT(rx_buf[0] == OPC_PASSON );
-            state = SM_PASS_CHECK_SLAVE;
-            break;
-
-        /* Receving a passon while in SETUP state */
-        case SM_PASS_CHECK_SLAVE:
-            {
-                if(rx_buf[3] == 0) { //ttl
-                    /* Save data from this message!. It contains our id!
-                     * PASSON */
+                case OPC_PASSON:
+                    /* Save data from this message!. It contains our id! */
                     id               = rx_buf[1]; //This my id, if ttl is 0
                     nr_of_players    = rx_buf[2];
-                    //uint8_t ttl      = rx_buf[3];
-                    seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
-                    //Best guess, for next player
-                    remaining_time[(id + 1) % nr_of_players] = seconds_left;
-                    state = SM_MSG_CLAIM;
-                }
-                else
-                    state = SM_MSG_SLAVE;
+                    if(rx_buf[3] == 0) { //ttl == 0 => it is our turn now
+                        seconds_left = (((uint16_t)rx_buf[4]) << 8) | rx_buf[5];
+                        //Best guess, for next player
+                        remaining_time[(id + 1) % nr_of_players] = seconds_left;
+                        send_my_claim(seconds_left);
+                        state = SM_MSG_CLAIM;
+                    } else {
+                        /* Unlikely situation that we rebooted during count down
+                         * Just passon and goto SM_MSG */
+                        send_passon(rx_buf[3] - 1);
+                        state = SM_MSG;
+                    }
+                    break;
+
+                case OPC_CLAIM:
+                    {
+                        /* Just send on claim and wait for recovery assign
+                         * or the regular passon message */
+                        uint8_t other_id = save_claim_data();
+                        send_other_claim(other_id);
+                        state = SM_BTN_INIT;
+                    }
+                    break;
+
+                /* On anything else, just stay here */
+                case OPC_PANIC:
+                    state = SM_BTN_INIT;
+                    break;
             }
             break;
 
-        case SM_PANIC:
-            beep_start(1 * TMO_10MS);
-            panic_animation();
-            break;
-
-        case SM_MSG:
+        case SM_MSG: //4
             if (msg_available()) {
-                state = SM_IS_ASSIGN;
+                switch((enum OPC)rx_buf[0]){
+                    case OPC_ASSIGN:
+                        /* Somebody is sending recovery messages to us.
+                         * But we are okay, so ignore it */
+                    break;
+
+                    case OPC_CLAIM:
+                    {
+                        uint8_t other_id = save_claim_data();
+                        if(other_id != id) {
+                            /* Send message onto the assigned one.
+                             * But keep track of its time */
+                            active_player_id = other_id;
+                            send_other_claim(other_id);
+                        }
+                        //Counter reset voor display
+                        set_timer(&decrement_timer, 1 * TMO_SECOND);
+                        other_player_time = 0;
+                    }
+                    break;
+
+                    case OPC_PASSON:
+                    {
+                        //uint8_t r_id     = rx_buf[1]; //This my id, if ttl is 0
+                        nr_of_players    = rx_buf[2];
+                        uint8_t ttl      = rx_buf[3];
+                        //uint16_t secs    = rx_buf[4];
+                        //secs = secs << 8 | rx_buf[5];
+                        if(ttl == 0) {
+                            send_my_claim(seconds_left);
+                            beep_start(3 * TMO_100MS);
+                            state = SM_MSG_CLAIM;
+                        } else {
+                            /* TTL != 0 means we are in init fase! */
+                            uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
+                            beep_start(tmo);
+
+                            /* Add 'silence' by waiting a little longer before continuing */
+                            set_timer(&statemachine_delay, tmo + 2 * TMO_10MS);
+
+                            /* Show the number of players detected during countdown:
+                             * for player 1 of 2 it show "P0-2" */
+                            display_char(0, 'P');
+                            filldisplay(1, id);
+                            filldisplay(2, LED_DASH);
+                            filldisplay(3, nr_of_players);
+
+                            /* Send message straight away,
+                             * we will wait before processing another */
+                            send_passon(ttl - 1);
+                        }
+                    }
+                    break;
+
+                    case OPC_PANIC:
+                    break;
+                }
             } else {
                 /* Display remaining time of current active player (not us) */
                 display_seconds_as_minutes(other_player_time);
@@ -529,120 +529,39 @@ static void statemachine(void)
                     remaining_time[active_player_id]--;
                     set_timer(&decrement_timer, 1 * TMO_SECOND);
                 }
-                state = SM_BTN_RECOVER;
-            }
-            break;
-
-        case SM_IS_ASSIGN:
-            if(rx_buf[0] == OPC_ASSIGN) {
-                /* Drop it. Someone is pressing button but we are already okay. */
-                state = SM_MSG;
-            }else {
-                state = SM_IS_PASS;
-            }
-            break;
-
-        case SM_IS_PASS:
-            if(rx_buf[0] == OPC_PASSON) {
-                state = SM_TTL_CHECK;
-            } else {
-                state = SM_IS_CLAIM;
-            }
-            break;
-
-        case SM_IS_CLAIM:
-            ASSERT(rx_buf[0] == OPC_CLAIM);
-            state = SM_CLAIM_CHECK;
-            break;
-
-        case SM_CLAIM_CHECK:
-            {
-                //CLAIM message
-                uint8_t other_id = save_claim_data();
-                if(other_id != id) {
-                    /* Send message onto the assigned one.
-                     * But keep track of its time */
-                    active_player_id = other_id;
-                    send_other_claim(other_id);
-                }
-                //Counter reset voor display
-                set_timer(&decrement_timer, 1 * TMO_SECOND);
-                other_player_time = 0;
-                state = SM_MSG;
-            }
-            break;
-
-        case SM_TTL_CHECK:
-            {
-                //PASSON message
-                //uint8_t r_id     = rx_buf[1]; //This my id, if ttl is 0
-                nr_of_players    = rx_buf[2];
-                uint8_t ttl      = rx_buf[3];
-                //uint16_t secs    = rx_buf[4];
-                //secs = secs << 8 | rx_buf[5];
-                if(ttl == 0) {
-                    send_my_claim(seconds_left);
-                    beep_start(3 * TMO_100MS);
-                    state = SM_MSG_CLAIM;
-                } else {
-                    /* TTL != 0 means we are in discovery mode! */
-                    uint8_t tmo = ((255 - ttl) / 10) * TMO_10MS;
-                    beep_start(tmo);
-
-                    /* Add 'silence' by waiting a little longer before continuing */
-                    set_timer(&statemachine_delay, tmo + 2 * TMO_10MS);
-
-                    /* Show the number of players detected during countdown:
-                     * for player 1 of 2 it show "P0-2" */
-                    display_char(0, 'P');
-                    filldisplay(1, id);
-                    filldisplay(2, LED_DASH);
-                    filldisplay(3, nr_of_players);
-
-                    /* Send message straight away,
-                     * we will wait before processing another */
-                    send_passon(ttl - 1);
-                    state = SM_MSG;
+                if(recovery_btn_is_pressed()) {
+                    uint8_t next_id = (id + 1) % nr_of_players;
+                    send_assign(next_id, remaining_time[next_id]);
                 }
             }
             break;
 
-        case SM_MSG_CLAIM:
+        case SM_MSG_CLAIM: //5
             print4char("RECO");
             if (msg_available()) {
-                state = SM_IS_CLAIM2;
+                if(rx_buf[0] == OPC_CLAIM && (rx_buf[1] == id)) {
+                    /* We got OUR claim back. So lets start down counting! */
+                    set_timer(&decrement_timer, 1 * TMO_SECOND);
+                    /* Always have atleast 60 seconds of play */
+                    if(seconds_left < 60)
+                        seconds_left = 60;
+                    state = SM_BTN;
+                }
             } else {
-                state = SM_BTN_RECOVER2;
+                /* Recover by resending our claim message */
+                if(recovery_btn_is_pressed())
+                    send_my_claim(seconds_left);
             }
             break;
 
-        case SM_BTN_RECOVER2:
-            if(recovery_btn_is_pressed())
-                send_claim(id, seconds_left);
-
-            state = SM_MSG_CLAIM;
-            break;
-
-        case SM_IS_CLAIM2:
-            ASSERT((rx_buf[0] == OPC_CLAIM) && (rx_buf[1] == id));
-
-            /* We got OUR claim back. So lets start down counting! */
-            set_timer(&decrement_timer, 1 * TMO_SECOND);
-            /* Always have atleast 60 seconds of play */
-            if(seconds_left < 60)
-                seconds_left = 60;
-            state = SM_BTN;
-            break;
-
-        case SM_BTN:
-            /* Display duration of current active player (not us) */
+        case SM_BTN: // 6
+            /* Display our remaining time */
             display_seconds_as_minutes(seconds_left);
             if (btn_is_pressed()) {
                 send_passon(0); // ttl 0 = next
                 beep_start(1 * TMO_10MS);
                 state = SM_MSG;
-            }
-            else {
+            } else {
                 if(timer_elapsed(&decrement_timer)) {
                     set_timer(&decrement_timer, 1 * TMO_SECOND);
 
@@ -652,17 +571,6 @@ static void statemachine(void)
                         beep_start(1 * TMO_10MS);
                 }
             }
-            break;
-
-        case SM_BTN_RECOVER:
-            /* Dirty hack: print the same as SM_MSG would do */
-            //display_seconds_as_minutes(other_player_time);
-            if(recovery_btn_is_pressed())
-            {
-                uint8_t next_id = (id + 1) % nr_of_players;
-                send_assign(next_id, remaining_time[next_id]);
-            }
-            state = SM_MSG;
             break;
     }
 
@@ -685,7 +593,6 @@ int main()
 {
     /* Init the hardware  */
     timer0_init();
-
     uart1_init();
 
     /* Enable interrupts, AFTER hardware setup */
